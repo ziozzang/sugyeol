@@ -31,7 +31,15 @@ func makeTar(source string) (*os.File, int64, string, error) {
 	}()
 	tw := tar.NewWriter(tmp)
 	rootParent := filepath.Dir(abs)
+	total, err := regularFileBytes(abs)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	progress := newProgress(tr("progress_tar"), total)
 	err = filepath.Walk(abs, func(path string, fi os.FileInfo, walkErr error) error {
+		if err := checkCanceled(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -58,7 +66,8 @@ func makeTar(source string) (*os.File, int64, string, error) {
 			if err != nil {
 				return err
 			}
-			_, copyErr := io.Copy(tw, f)
+			uiVerbosef("TAR: %s (%s)", filepath.ToSlash(rel), humanSize(fi.Size()))
+			_, copyErr := io.Copy(tw, progress.Reader(f))
 			closeErr := f.Close()
 			if copyErr != nil {
 				return copyErr
@@ -70,6 +79,7 @@ func makeTar(source string) (*os.File, int64, string, error) {
 	if err == nil {
 		err = tw.Close()
 	}
+	progress.Finish(err)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -82,6 +92,26 @@ func makeTar(source string) (*os.File, int64, string, error) {
 	}
 	ok = true
 	return tmp, sz, info.Name(), nil
+}
+
+func regularFileBytes(root string) (int64, error) {
+	var total int64
+	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := checkCanceled(); err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			if info.Size() > 0 && total > (1<<63-1)-info.Size() {
+				return fmt.Errorf("input is too large")
+			}
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
 }
 
 func extractTar(r io.Reader, dest string) error {

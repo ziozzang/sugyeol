@@ -181,8 +181,11 @@ func downloadVerified(ctx context.Context, client *http.Client, a asset, want, d
 		}
 	}()
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
-		return "", err
+	progress := newProgress(tr("progress_update_download"), a.Size)
+	_, copyErr := io.Copy(io.MultiWriter(tmp, h, progress), resp.Body)
+	progress.Finish(copyErr)
+	if copyErr != nil {
+		return "", copyErr
 	}
 	if err := tmp.Sync(); err != nil {
 		return "", err

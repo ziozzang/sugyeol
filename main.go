@@ -1,21 +1,36 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
-var version = "1.2.0"
+var version = "1.3.0"
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	commandContext = ctx
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		// Restore the default handler so a second Ctrl+C can force termination.
+		stop()
+	}()
 	startUpdateRefresh(os.Args[1:])
 	defer maybeNotifyUpdate(os.Args[1:])
 	if err := run(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
+		}
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, tr("canceled"))
+			os.Exit(130)
 		}
 		fmt.Fprintln(os.Stderr, "sugyeol:", err)
 		os.Exit(1)
@@ -23,11 +38,23 @@ func main() {
 }
 
 func run(args []string) error {
-	args = parseLanguageArg(args)
+	var err error
+	for {
+		before := len(args)
+		args = parseLanguageArg(args)
+		args, err = parseGlobalUIArgs(args)
+		if err != nil {
+			return err
+		}
+		if len(args) == before {
+			break
+		}
+	}
 	if len(args) == 0 {
 		usage()
 		return errors.New(tr("command_required"))
 	}
+	uiDebugf("version=%s command=%s progress=%s", version, args[0], ui.mode.String())
 	switch args[0] {
 	case "pack":
 		fs := flag.NewFlagSet("pack", flag.ContinueOnError)
@@ -55,6 +82,7 @@ func run(args []string) error {
 		if fs.NArg() != 1 {
 			return errors.New(tr("pack_usage"))
 		}
+		uiDebugf("pack source=%q output=%q size=%q parts=%d scramble=%t compression=%q encrypted=%t", fs.Arg(0), *out, *sizeText, *partsCount, *scramble, *compressionText, *encrypt)
 		if partsWasSet && (*partsCount < 1 || *partsCount > 100000) {
 			return errors.New("-parts must be between 1 and 100000")
 		}
@@ -104,6 +132,7 @@ func run(args []string) error {
 		if fs.NArg() == 0 {
 			return errors.New(tr("verify_files"))
 		}
+		uiDebugf("verify inputs=%d detached=%t trusted_keys=%d minimum=%d", fs.NArg(), *source != "" || (fs.NArg() == 1 && strings.HasSuffix(fs.Arg(0), ".meta")), len(pubkeys), *minSignatures)
 		if *source != "" || (fs.NArg() == 1 && strings.HasSuffix(fs.Arg(0), ".meta")) {
 			if fs.NArg() != 1 {
 				return errors.New("detached signature verification requires exactly one .meta file")
@@ -158,6 +187,15 @@ func run(args []string) error {
 		if fs.NArg() == 0 {
 			return errors.New(tr("unpack_files"))
 		}
+		uiDebugf("unpack parts=%d output=%q password_source=%s", fs.NArg(), *out, func() string {
+			if *passwordText != "" {
+				return "argument"
+			}
+			if *passwordFile != "" {
+				return "file"
+			}
+			return "prompt-if-required"
+		}())
 		var password []byte
 		var err error
 		if *passwordText != "" && *passwordFile != "" {

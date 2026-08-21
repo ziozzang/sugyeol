@@ -158,7 +158,9 @@ func encryptPayload(dst io.Writer, src io.Reader, m manifest, master []byte, non
 		if _, err := io.ReadFull(src, buf[:n]); err != nil {
 			return written, err
 		}
-		plainHash.Write(buf[:n])
+		if _, err := plainHash.Write(buf[:n]); err != nil {
+			return written, err
+		}
 		nonce := append([]byte(nil), base...)
 		binary.BigEndian.PutUint32(nonce[len(nonce)-4:], counter)
 		sealed := aead.Seal(sealedBuffer[:0], nonce, buf[:n], aad)

@@ -24,7 +24,7 @@
 
 ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
-현재 릴리스는 **v1.2.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
+현재 릴리스는 **v1.3.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## 빌드와 설치
 
@@ -36,7 +36,29 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.2.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+`make release VERSION=1.3.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+
+## 진행률·상세 출력·디버그·취소
+
+오래 걸리는 작업의 진행 UI는 `stderr`로 출력하고 명령 결과는 기존 출력 채널을 유지합니다. 대화형 터미널에서는 퍼센트, 처리 바이트, 평균 `KiB/s`·`MiB/s`·`GiB/s`, ETA를 갱신형 bar로 보여줍니다. 비대화형 실행에서는 시작·완료·경과 시간·평균 속도를 간결한 로그로 남깁니다.
+
+```sh
+# 전역 UI 옵션은 명령 앞에 둡니다.
+sugyeol --verbose image pull -o app.oci.tgz registry.example.com/team/app:1.2.3
+sugyeol -v pack -s 1900 -o backup ./source
+sugyeol --debug image verify app.oci.tgz app.image.meta
+
+# stderr redirect나 CI에서도 주기적인 진행률 줄을 출력합니다.
+sugyeol --progress always pack -o backup ./source
+
+# 진행 UI를 완전히 끕니다.
+sugyeol --progress never verify backup.part-*.zip
+sugyeol --no-progress verify backup.part-*.zip
+```
+
+`--verbose/-v`는 파일·파트·컨테이너 blob별 상태를 추가합니다. `--debug`는 verbose를 포함하고 시각이 붙은 동작 진단을 보여주지만 비밀번호, 개인키, bearer token, credential 값과 Authorization header는 출력하지 않습니다. TAR 생성, 해시/서명, 암호화/스크램블링, 압축/ZIP 기록, 검증, 복구/추출, OCI/docker 아카이브 검사, registry 다운로드와 자체 업데이트 다운로드에 진행률을 제공합니다.
+
+기본 `--progress auto`는 터미널에서만 live bar를 사용합니다. `always`는 수집 로그에 적합한 줄 단위 퍼센트를 주기적으로 출력하고 `never`는 진행 출력을 끕니다. Ctrl+C를 한 번 누르면 종료 코드 130으로 정상 취소를 요청하고 열린 stream을 닫은 뒤 임시 출력 정리 절차를 실행합니다. 작업이 즉시 중단되지 않으면 두 번째 Ctrl+C로 운영체제의 즉시 종료 동작을 사용할 수 있습니다.
 
 ## 서명자 초기화
 
@@ -210,7 +232,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check          # 단축: -c
 sugyeol update --force          # 단축: -f
-sugyeol update --version v1.2.0 # 단축: -v v1.2.0
+sugyeol update --version v1.3.0 # 단축: -v v1.3.0
 ```
 
 현재 플랫폼용 GitHub Release 자산을 받고 `SHA256SUMS`를 확인한 뒤 실행 파일을 원자 교체합니다. 대화형 실행은 최대 24시간에 한 번 실패 허용 방식으로 새 버전 알림만 확인하며 실제 교체에는 항상 `sugyeol update`가 필요합니다. `SUGYEOL_NO_UPDATE_CHECK=1`로 알림 확인을 끌 수 있습니다.
@@ -222,12 +244,12 @@ GitHub Actions는 의도적으로 비활성화했습니다. 직접 빌드·테�
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.2.0
+make release VERSION=1.3.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.2.0 \
-  dist/sugyeol_1.2.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.2.0"
+gh release create v1.3.0 \
+  dist/sugyeol_1.3.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.3.0"
 ```
 
 ## 보안 경계

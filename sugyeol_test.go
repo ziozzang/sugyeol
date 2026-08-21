@@ -3,9 +3,11 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +18,50 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestProgressVerboseDebugAndCancellation(t *testing.T) {
+	oldUI, oldOutput, oldContext := ui, uiOutput, commandContext
+	defer func() {
+		ui, uiOutput, commandContext = oldUI, oldOutput, oldContext
+	}()
+	ui = uiSettings{mode: progressAuto}
+	var output bytes.Buffer
+	uiOutput = &output
+	commandContext = context.Background()
+
+	args, err := parseGlobalUIArgs([]string{"--verbose", "--debug", "--progress=always", "pack"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 1 || args[0] != "pack" || !ui.verbose || !ui.debug || ui.mode != progressAlways {
+		t.Fatalf("global UI parsing failed: args=%v ui=%+v", args, ui)
+	}
+	p := newProgress("test transfer", 100)
+	if _, err := p.Write(bytes.Repeat([]byte{'x'}, 50)); err != nil {
+		t.Fatal(err)
+	}
+	p.Finish(nil)
+	if got := output.String(); !strings.Contains(got, "50%") || !strings.Contains(got, "done") {
+		t.Fatalf("progress output is incomplete: %q", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	commandContext = ctx
+	cancel()
+	p = newProgress("canceled transfer", 10)
+	_, err = p.Reader(strings.NewReader("0123456789")).Read(make([]byte, 10))
+	p.Finish(err)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(output.String(), "canceled") {
+		t.Fatalf("cancellation was not propagated: %v, %q", err, output.String())
+	}
+
+	if _, err := parseGlobalUIArgs([]string{"--progress=invalid", "version"}); err == nil {
+		t.Fatal("invalid progress mode was accepted")
+	}
+	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.3.0"}); got != "update" {
+		t.Fatalf("effective command = %q", got)
+	}
+}
 
 func TestParseSizeDefaultIsMB(t *testing.T) {
 	got, err := parseSize("10")

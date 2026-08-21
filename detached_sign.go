@@ -312,9 +312,17 @@ func buildSignedManifest(source string) ([]byte, signedManifest, error) {
 	}
 	m := signedManifest{Format: "sugyeol-sha256-manifest", Version: 1, RootName: rootInfo.Name()}
 	parent := filepath.Dir(abs)
+	total, err := regularFileBytes(abs)
+	if err != nil {
+		return nil, signedManifest{}, err
+	}
+	progress := newProgress(tr("progress_hash_source"), total)
 	err = filepath.Walk(abs, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if err := checkCanceled(); err != nil {
+			return err
 		}
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported entry: %s", path)
@@ -328,12 +336,13 @@ func buildSignedManifest(source string) ([]byte, signedManifest, error) {
 			e.Type = "directory"
 		} else {
 			e.Type, e.Size = "file", info.Size()
+			uiVerbosef("hashing: %s (%s)", filepath.ToSlash(rel), humanSize(info.Size()))
 			f, err := os.Open(path)
 			if err != nil {
 				return err
 			}
 			h := sha256.New()
-			_, copyErr := io.Copy(h, f)
+			_, copyErr := io.Copy(h, progress.Reader(f))
 			closeErr := f.Close()
 			if copyErr != nil {
 				return copyErr
@@ -346,6 +355,7 @@ func buildSignedManifest(source string) ([]byte, signedManifest, error) {
 		m.Entries = append(m.Entries, e)
 		return nil
 	})
+	progress.Finish(err)
 	if err != nil {
 		return nil, signedManifest{}, err
 	}

@@ -24,7 +24,7 @@ registry image ─────── native pull ──> OCI tar/tgz ──> sig
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.2.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+Current release: **v1.3.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## Build and install
 
@@ -36,7 +36,29 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.2.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.3.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+
+## Progress, verbose output, debug output, and cancellation
+
+Long-running work reports progress on `stderr`, while command results remain on their existing output stream. Interactive terminals get an updating bar with percentage, processed bytes, average `KiB/s`/`MiB/s`/`GiB/s`, and ETA. Non-interactive use gets concise start/completion records including elapsed time and average speed.
+
+```sh
+# Global UI options are placed before the command.
+sugyeol --verbose image pull -o app.oci.tgz registry.example.com/team/app:1.2.3
+sugyeol -v pack -s 1900 -o backup ./source
+sugyeol --debug image verify app.oci.tgz app.image.meta
+
+# Print periodic progress lines even when stderr is redirected or running in CI.
+sugyeol --progress always pack -o backup ./source
+
+# Disable progress UI completely.
+sugyeol --progress never verify backup.part-*.zip
+sugyeol --no-progress verify backup.part-*.zip
+```
+
+`--verbose/-v` adds per-file, per-part, and per-container-blob status. `--debug` implies verbose and adds timestamped operational diagnostics, but never prints passwords, private keys, bearer tokens, credential values, or Authorization headers. Progress is available for TAR creation, hashing/signing, encryption/scrambling, compression/ZIP writing, verification, restoration/extraction, OCI/docker archive inspection, registry downloads, and self-update downloads.
+
+The default `--progress auto` uses a live bar only on a terminal. `always` emits periodic line-oriented percentages suitable for captured logs, and `never` disables progress output. Pressing Ctrl+C once requests graceful cancellation with exit status 130, closes active streams, and lets temporary-output cleanup run. A second Ctrl+C restores immediate operating-system termination if an operation cannot stop promptly.
 
 ## Initialize the signing identity
 
@@ -211,7 +233,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.2.0  # short: -v v1.2.0
+sugyeol update --version v1.3.0  # short: -v v1.3.0
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -223,12 +245,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.2.0
+make release VERSION=1.3.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.2.0 \
-  dist/sugyeol_1.2.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.2.0"
+gh release create v1.3.0 \
+  dist/sugyeol_1.3.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.3.0"
 ```
 
 ## Security boundaries

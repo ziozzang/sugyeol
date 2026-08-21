@@ -28,10 +28,13 @@ func updateCommand(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(commandContext, 10*time.Minute)
 	defer cancel()
 	client := &http.Client{}
+	uiDebugf("update target=%q check=%t force=%t", *target, *check, *force)
+	lookupProgress := newProgress(tr("progress_release_lookup"), 0)
 	rel, err := fetchRelease(ctx, client, updateRepo, *target, os.Getenv("GITHUB_TOKEN"))
+	lookupProgress.Finish(err)
 	if err != nil {
 		return fmt.Errorf("release lookup: %w", err)
 	}
@@ -56,7 +59,9 @@ func updateCommand(args []string) error {
 	if !ok {
 		return fmt.Errorf("release %s has no asset %s", rel.TagName, assetName)
 	}
+	checksumProgress := newProgress(tr("progress_checksums"), 0)
 	sums, err := releaseChecksums(ctx, client, rel)
+	checksumProgress.Finish(err)
 	if err != nil {
 		return err
 	}
@@ -96,15 +101,35 @@ func updateEligible(args []string) bool {
 	if os.Getenv("SUGYEOL_NO_UPDATE_CHECK") != "" {
 		return false
 	}
-	if len(args) == 0 {
+	command := effectiveCommand(args)
+	if command == "" {
 		return false
 	}
-	switch args[0] {
+	switch command {
 	case "update", "self-update", "version", "--version", "-version", "help", "-h", "--help":
 		return false
 	}
 	info, err := os.Stderr.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func effectiveCommand(args []string) string {
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--lang" || args[0] == "--progress":
+			if len(args) < 2 {
+				return ""
+			}
+			args = args[2:]
+		case strings.HasPrefix(args[0], "--lang=") || strings.HasPrefix(args[0], "--progress="):
+			args = args[1:]
+		case args[0] == "--verbose" || args[0] == "-v" || args[0] == "--debug" || args[0] == "--no-progress":
+			args = args[1:]
+		default:
+			return args[0]
+		}
+	}
+	return ""
 }
 
 func startUpdateRefresh(args []string) {

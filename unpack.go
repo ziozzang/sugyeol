@@ -12,7 +12,7 @@ func unpack(paths []string, out string) error {
 	return unpackWithPassword(paths, out, nil)
 }
 
-func unpackWithPassword(paths []string, out string, password []byte) error {
+func unpackWithPassword(paths []string, out string, password []byte) (resultErr error) {
 	parts, err := verifyParts(paths, false)
 	if err != nil {
 		return err
@@ -31,13 +31,27 @@ func unpackWithPassword(paths []string, out string, password []byte) error {
 			}
 			defer clearBytes(password)
 		}
+		uiVerbosef("deriving package decryption key with Argon2id")
 		master, err = deriveMasterKey(password, parts[0].m.KDFSalt, parts[0].m.KDFMemory, parts[0].m.KDFTime, parts[0].m.KDFParallelism)
 		if err != nil {
 			return err
 		}
 		defer clearBytes(master)
 	}
+	var total int64
 	for _, p := range parts {
+		if p.m.PayloadSize > 0 && total > (1<<63-1)-p.m.PayloadSize {
+			return fmt.Errorf("package payload size overflow")
+		}
+		total += p.m.PayloadSize
+	}
+	restoreProgress := newProgress(tr("progress_restore"), total)
+	defer func() { restoreProgress.Finish(resultErr) }()
+	for _, p := range parts {
+		if err := checkCanceled(); err != nil {
+			return err
+		}
+		uiVerbosef("restoring part %d/%d: %s", p.m.Part, p.m.TotalParts, p.path)
 		zr, payload, err := payloadReader(p.path)
 		if err != nil {
 			return err
@@ -47,13 +61,13 @@ func unpackWithPassword(paths []string, out string, password []byte) error {
 		var n int64
 		var copyErr error
 		if p.m.Encryption == encryptionName {
-			n, copyErr = decryptPayload(tarFile, payload, p.m, master, h)
+			n, copyErr = decryptPayload(tarFile, payload, p.m, master, io.MultiWriter(h, restoreProgress))
 		} else {
 			var decoded io.Reader = payload
 			if p.m.Scramble == "xor-sha256-counter-v1" {
 				decoded = newXORReader(payload, p.m.SetID, p.m.Part, nonce)
 			}
-			n, copyErr = io.Copy(io.MultiWriter(tarFile, h), decoded)
+			n, copyErr = io.Copy(io.MultiWriter(tarFile, h, restoreProgress), decoded)
 		}
 		closeErr := payload.Close()
 		zipCloseErr := zr.Close()
@@ -70,11 +84,15 @@ func unpackWithPassword(paths []string, out string, password []byte) error {
 			return fmt.Errorf("파트 %d의 원본 payload SHA-256 불일치", p.m.Part)
 		}
 	}
+	restoreProgress.Finish(nil)
 	if _, err := tarFile.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if err := extractTar(tarFile, out); err != nil {
-		return err
+	extractProgress := newProgress(tr("progress_extract"), total)
+	extractErr := extractTar(extractProgress.Reader(tarFile), out)
+	extractProgress.Finish(extractErr)
+	if extractErr != nil {
+		return extractErr
 	}
 	fmt.Printf(tr("restored"), parts[0].m.SourceName, out)
 	return nil

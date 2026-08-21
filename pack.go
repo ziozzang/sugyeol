@@ -45,6 +45,7 @@ func packWithOptionsAndParts(source, outPrefix string, maxSize int64, scramble b
 	var master []byte
 	kdfSalt := ""
 	if len(password) > 0 {
+		uiVerbosef("deriving package encryption key with Argon2id")
 		kdfSalt, err = randomHex(16)
 		if err != nil {
 			return err
@@ -87,7 +88,12 @@ func packWithOptionsAndParts(source, outPrefix string, maxSize int64, scramble b
 		}
 	}()
 	var offset int64
+	progress := newProgress(tr("progress_pack"), tarSize)
 	for part := 1; part <= total; part++ {
+		if err := checkCanceled(); err != nil {
+			progress.Finish(err)
+			return err
+		}
 		remaining := tarSize - offset
 		amount := payloadCap
 		if requestedParts > 0 {
@@ -134,7 +140,9 @@ func packWithOptionsAndParts(source, outPrefix string, maxSize int64, scramble b
 			}(),
 		}
 		compression.apply(&partManifest)
-		if err := writePart(name, tarFile, amount, partManifest, priv, pubPEM, identity, master, compression); err != nil {
+		uiVerbosef("part %d/%d: offset=%d payload=%s output=%s", part, total, offset, humanSize(amount), name)
+		if err := writePart(name, tarFile, amount, partManifest, priv, pubPEM, identity, master, compression, progress); err != nil {
+			progress.Finish(err)
 			return err
 		}
 		created = append(created, name)
@@ -148,11 +156,12 @@ func packWithOptionsAndParts(source, outPrefix string, maxSize int64, scramble b
 		fmt.Printf(tr("created"), name, st.Size())
 		offset += amount
 	}
+	progress.Finish(nil)
 	ok = true
 	return nil
 }
 
-func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed25519.PrivateKey, pubPEM []byte, identity signingIdentity, master []byte, compression compressionConfig) error {
+func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed25519.PrivateKey, pubPEM []byte, identity signingIdentity, master []byte, compression compressionConfig, progress *progressBar) error {
 	nonce, err := randomHex(16)
 	if err != nil {
 		return err
@@ -177,10 +186,10 @@ func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed2
 		if err != nil {
 			return err
 		}
-		n, err = encryptPayload(scrambled, io.LimitReader(tarFile, amount), m, master, m.EncryptionNonce, originalHash, scrambledHash)
+		n, err = encryptPayload(scrambled, io.LimitReader(tarFile, amount), m, master, m.EncryptionNonce, io.MultiWriter(originalHash, progress), scrambledHash)
 		m.StoredSize = n
 	} else {
-		raw := io.TeeReader(io.LimitReader(tarFile, amount), originalHash)
+		raw := io.TeeReader(io.LimitReader(tarFile, amount), io.MultiWriter(originalHash, progress))
 		var payloadReader io.Reader = raw
 		if m.Scramble == "xor-sha256-counter-v1" {
 			payloadReader = newXORReader(raw, m.SetID, m.Part, nonceBytes)
@@ -249,8 +258,15 @@ func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed2
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(w, scrambled); err != nil {
-		return err
+	progressKey := "progress_write_part"
+	if compression.method == zip.Deflate {
+		progressKey = "progress_compress_part"
+	}
+	writeProgress := newProgress(tr(progressKey, m.Part, m.TotalParts), m.StoredSize)
+	_, copyErr := io.Copy(w, writeProgress.Reader(scrambled))
+	writeProgress.Finish(copyErr)
+	if copyErr != nil {
+		return copyErr
 	}
 	if err := zw.Close(); err != nil {
 		return err

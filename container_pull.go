@@ -77,10 +77,13 @@ func imagePullCommand(args []string) error {
 	if strings.HasSuffix(strings.ToLower(*out), ".tgz") || strings.HasSuffix(strings.ToLower(*out), ".tar.gz") {
 		*gzipOutput = true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	uiDebugf("image pull reference=%q output=%q platform=%q all_platforms=%t gzip=%t sign=%t", fs.Arg(0), *out, *platform, *allPlatforms, *gzipOutput, *signAfterPull)
+	ctx, cancel := context.WithTimeout(commandContext, 24*time.Hour)
 	defer cancel()
 	puller := &registryPuller{ref: ref, client: &http.Client{Timeout: 0}, blobs: make(map[string]pulledBlob), allPlatforms: *allPlatforms, platform: wanted}
+	resolveProgress := newProgress(tr("progress_resolve_image"), 0)
 	roots, err := puller.collectImage(ctx)
+	resolveProgress.Finish(err)
 	if err != nil {
 		return err
 	}
@@ -158,6 +161,9 @@ func (p *registryPuller) collectImage(ctx context.Context) ([]ociDescriptor, err
 }
 
 func (p *registryPuller) collectDescriptor(ctx context.Context, descriptor ociDescriptor) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !digestPattern.MatchString(descriptor.Digest) || descriptor.Size < 0 {
 		return fmt.Errorf("invalid remote descriptor %q", descriptor.Digest)
 	}
@@ -252,6 +258,7 @@ func (p *registryPuller) get(ctx context.Context, endpointPath, accept string) (
 	}
 	endpoint := scheme + "://" + p.ref.Registry + endpointPath
 	request := func(auth string) (*http.Response, error) {
+		uiDebugf("registry GET %s authenticated=%t", endpoint, auth != "")
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return nil, err
@@ -282,7 +289,7 @@ func (p *registryPuller) get(ctx context.Context, endpointPath, accept string) (
 	return request(p.authorization)
 }
 
-func (p *registryPuller) writeArchive(ctx context.Context, output, reference string, roots []ociDescriptor, gzipOutput bool) error {
+func (p *registryPuller) writeArchive(ctx context.Context, output, reference string, roots []ociDescriptor, gzipOutput bool) (resultErr error) {
 	if _, err := os.Lstat(output); err == nil {
 		return fmt.Errorf("output already exists: %s", output)
 	} else if !os.IsNotExist(err) {
@@ -334,13 +341,25 @@ func (p *registryPuller) writeArchive(ctx context.Context, output, reference str
 		return err
 	}
 	digests := make([]string, 0, len(p.blobs))
+	var total int64
 	for digest := range p.blobs {
 		digests = append(digests, digest)
+		size := p.blobs[digest].descriptor.Size
+		if size < 0 || total > (1<<63-1)-size {
+			return fmt.Errorf("container image content size overflow")
+		}
+		total += size
 	}
 	sort.Strings(digests)
+	progress := newProgress(tr("progress_pull_blobs"), total)
+	defer func() { progress.Finish(resultErr) }()
 	for _, digest := range digests {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		blob := p.blobs[digest]
 		name := "blobs/sha256/" + strings.TrimPrefix(digest, "sha256:")
+		uiVerbosef("blob %s (%s)", digest, humanSize(blob.descriptor.Size))
 		if len(blob.data) > 0 {
 			if int64(len(blob.data)) != blob.descriptor.Size {
 				return fmt.Errorf("blob size mismatch: %s", digest)
@@ -348,6 +367,7 @@ func (p *registryPuller) writeArchive(ctx context.Context, output, reference str
 			if err := writeContainerTarBytes(tw, name, blob.data); err != nil {
 				return err
 			}
+			progress.Add(int64(len(blob.data)))
 			continue
 		}
 		resp, err := p.get(ctx, "/v2/"+p.ref.Repository+"/blobs/"+digest, "application/octet-stream")
@@ -363,7 +383,7 @@ func (p *registryPuller) writeArchive(ctx context.Context, output, reference str
 			return err
 		}
 		h := sha256.New()
-		n, copyErr := io.CopyN(io.MultiWriter(tw, h), resp.Body, blob.descriptor.Size)
+		n, copyErr := io.CopyN(io.MultiWriter(tw, h, progress), resp.Body, blob.descriptor.Size)
 		var extra [1]byte
 		extraN, extraErr := resp.Body.Read(extra[:])
 		closeErr := resp.Body.Close()
@@ -401,6 +421,7 @@ func (p *registryPuller) writeArchive(ctx context.Context, output, reference str
 		return err
 	}
 	ok = true
+	progress.Finish(nil)
 	return nil
 }
 

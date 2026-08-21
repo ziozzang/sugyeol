@@ -77,7 +77,7 @@ func (c *byteCounter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func inspectContainerArchive(filePath string) (localImageSubject, error) {
+func inspectContainerArchive(filePath string) (subject localImageSubject, resultErr error) {
 	info, err := os.Lstat(filePath)
 	if err != nil {
 		return localImageSubject{}, err
@@ -85,6 +85,10 @@ func inspectContainerArchive(filePath string) (localImageSubject, error) {
 	if !info.Mode().IsRegular() {
 		return localImageSubject{}, fmt.Errorf("container archive must be a regular file")
 	}
+	progress := newProgress(tr("progress_inspect_image"), info.Size())
+	defer func() { progress.Finish(resultErr) }()
+	uiVerbosef("container archive: %s (%s)", filePath, humanSize(info.Size()))
+	uiDebugf("inspect archive=%q size=%d mode=%s", filePath, info.Size(), info.Mode())
 	f, err := os.Open(filePath)
 	if err != nil {
 		return localImageSubject{}, err
@@ -92,7 +96,7 @@ func inspectContainerArchive(filePath string) (localImageSubject, error) {
 	defer f.Close()
 	h := sha256.New()
 	counter := &byteCounter{}
-	br := bufio.NewReader(io.TeeReader(f, io.MultiWriter(h, counter)))
+	br := bufio.NewReader(io.TeeReader(f, io.MultiWriter(h, counter, progress)))
 	compression := "none"
 	var archiveReader io.Reader = br
 	var gz *gzip.Reader
@@ -128,7 +132,7 @@ func inspectContainerArchive(filePath string) (localImageSubject, error) {
 	if postInfo.Size() != counter.n || postInfo.Size() != info.Size() || !postInfo.ModTime().Equal(info.ModTime()) {
 		return localImageSubject{}, fmt.Errorf("container archive changed while it was being inspected")
 	}
-	subject := localImageSubject{Format: containerArchiveFormat, Version: 1, ArchiveFile: filepath.Base(filePath),
+	subject = localImageSubject{Format: containerArchiveFormat, Version: 1, ArchiveFile: filepath.Base(filePath),
 		ArchiveSize: counter.n, ArchiveSHA256: hex.EncodeToString(h.Sum(nil)), Compression: compression}
 	if layoutBytes, ok := small["oci-layout"]; ok {
 		if err := inspectOCILayout(entries, small, layoutBytes, &subject); err != nil {

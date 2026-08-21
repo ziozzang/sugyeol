@@ -41,6 +41,10 @@ func verifyPinnedPartKey(parts []verifiedPart, trusted string) error {
 func verifyParts(paths []string, verbose bool) ([]verifiedPart, error) {
 	parts := make([]verifiedPart, 0, len(paths))
 	for _, path := range paths {
+		if err := checkCanceled(); err != nil {
+			return nil, err
+		}
+		uiVerbosef("verifying package part: %s", path)
 		p, err := verifyPart(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
@@ -183,8 +187,14 @@ func verifyPart(path string) (verifiedPart, error) {
 		return verifiedPart{}, err
 	}
 	h := sha256.New()
-	n, copyErr := io.Copy(h, r)
+	progress := newProgress(tr("progress_verify_part", m.Part, m.TotalParts), m.StoredSize)
+	n, copyErr := io.Copy(h, progress.Reader(r))
 	closeErr := r.Close()
+	progressErr := copyErr
+	if progressErr == nil {
+		progressErr = closeErr
+	}
+	progress.Finish(progressErr)
 	if copyErr != nil {
 		return verifiedPart{}, copyErr
 	}
