@@ -38,7 +38,7 @@ func updateCommand(args []string) error {
 	if cmp > 0 {
 		fmt.Printf(tr("update_available"), version, latest)
 	} else if cmp == 0 {
-		fmt.Printf(tr("update_latest"))
+		fmt.Print(tr("update_latest"))
 	} else {
 		fmt.Printf(tr("update_newer"), latest)
 	}
