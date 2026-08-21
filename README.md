@@ -2,7 +2,27 @@
 
 English is the primary documentation. [한국어 문서](README_KO.md)
 
+<p align="center">
+  <a href="https://commons.wikimedia.org/wiki/File:Sign_of_Taejong_of_Joseon.jpg">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/1/1c/Sign_of_Taejong_of_Joseon.jpg" width="260" alt="The sugyeol signature of King Taejong of Joseon">
+  </a>
+</p>
+
+<p align="center"><em>A historical sugyeol: King Taejong's handwritten mark, circa 1400.</em></p>
+
 Sugyeol is one statically linked Go binary for signed split ZIP packages, detached file/directory signatures, cumulative countersignatures, container-image signatures, verification, restoration, and self-update.
+
+Like its namesake—the traditional Korean handwritten mark used to authenticate a document—Sugyeol binds identity and integrity to a digital artifact.
+
+```text
+file / directory ──┬── sign ────────────────> .meta signature chain ──> verify
+                  │
+                  └── pack + optional encryption ──> signed split ZIPs ──> verify / unpack
+
+registry image ─────── native pull ──> OCI tar/tgz ──> sign / countersign / verify
+```
+
+The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
 Current release: **v1.2.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
@@ -218,3 +238,9 @@ gh release create v1.2.0 \
 - The private key never leaves `~/.sugyeol` through a Sugyeol command.
 - Compression is applied by ZIP after scrambling/encryption and is covered by the signed manifest.
 - Container signatures are local sidecars over validated OCI/docker archives; registry artifact publication and key revocation infrastructure are outside the current scope.
+
+## License and image credit
+
+Sugyeol is released under the [MIT License](LICENSE).
+
+The README image is the [sugyeol signature of King Taejong of Joseon](https://commons.wikimedia.org/wiki/File:Sign_of_Taejong_of_Joseon.jpg), circa 1400. Wikimedia Commons identifies the work as [Public Domain](https://creativecommons.org/publicdomain/mark/1.0/).

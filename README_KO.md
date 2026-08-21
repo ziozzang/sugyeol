@@ -2,7 +2,27 @@
 
 [English documentation](README.md)이 기본 문서이며 이 문서는 동일 기능의 한국어 보조 문서입니다.
 
+<p align="center">
+  <a href="https://commons.wikimedia.org/wiki/File:Sign_of_Taejong_of_Joseon.jpg">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/1/1c/Sign_of_Taejong_of_Joseon.jpg" width="260" alt="조선 태종의 수결 서명">
+  </a>
+</p>
+
+<p align="center"><em>약 1400년경 조선 태종의 실제 수결.</em></p>
+
 수결은 서명된 분할 ZIP 패키지, 파일/디렉터리 독립 서명, 누적 countersignature, 컨테이너 이미지 서명, 검증, 복구, 자체 업데이트를 하나의 정적 Go 바이너리로 제공합니다.
+
+전통적인 수결이 문서에 작성자의 신원과 진위를 새겼듯이, 이 도구는 디지털 파일에 서명자의 신원과 무결성을 결합합니다.
+
+```text
+파일 / 디렉터리 ──┬── sign ────────────────> .meta 서명 체인 ──> verify
+                 │
+                 └── pack + 선택적 암호화 ──> 서명된 분할 ZIP ──> verify / unpack
+
+원격 컨테이너 이미지 ── 네이티브 pull ──> OCI tar/tgz ──> sign / countersign / verify
+```
+
+ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
 현재 릴리스는 **v1.2.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
 
@@ -217,3 +237,9 @@ gh release create v1.2.0 \
 - 수결 명령을 통해 개인키가 `~/.sugyeol` 밖으로 내보내지지 않습니다.
 - ZIP 압축은 스크램블링/암호화 뒤 적용되며 압축 설정은 manifest 서명 범위입니다.
 - 컨테이너 서명은 검증된 OCI/docker 아카이브의 로컬 sidecar입니다. 레지스트리 artifact 게시와 키 폐기 인프라는 현재 범위 밖입니다.
+
+## 라이선스와 이미지 출처
+
+수결은 [MIT License](LICENSE)로 배포합니다.
+
+README 이미지는 약 1400년경의 [조선 태종 수결](https://commons.wikimedia.org/wiki/File:Sign_of_Taejong_of_Joseon.jpg)입니다. Wikimedia Commons에서 [Public Domain](https://creativecommons.org/publicdomain/mark/1.0/)으로 표시한 자료입니다.
