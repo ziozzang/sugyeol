@@ -18,33 +18,35 @@ const (
 )
 
 type manifest struct {
-	Format          string `json:"format"`
-	Version         int    `json:"version"`
-	SetID           string `json:"set_id"`
-	SourceName      string `json:"source_name"`
-	Part            int    `json:"part"`
-	TotalParts      int    `json:"total_parts"`
-	MaxPartSize     int64  `json:"max_part_size"`
-	PayloadOffset   int64  `json:"payload_offset"`
-	PayloadSize     int64  `json:"payload_size"`
-	StoredSize      int64  `json:"stored_size"`
-	PayloadSHA256   string `json:"payload_sha256"`
-	ScrambledSHA256 string `json:"scrambled_sha256"`
-	Nonce           string `json:"nonce"`
-	Scramble        string `json:"scramble"`
-	Encryption      string `json:"encryption"`
-	KDF             string `json:"kdf,omitempty"`
-	KDFSalt         string `json:"kdf_salt,omitempty"`
-	KDFMemory       uint32 `json:"kdf_memory_kib,omitempty"`
-	KDFTime         uint32 `json:"kdf_time,omitempty"`
-	KDFParallelism  uint8  `json:"kdf_parallelism,omitempty"`
-	EncryptionNonce string `json:"encryption_nonce,omitempty"`
-	SignerName      string `json:"signer_name"`
-	SignerEmail     string `json:"signer_email"`
-	SignedAt        string `json:"signed_at"`
-	SignatureSalt   string `json:"signature_salt"`
-	Signature       string `json:"signature"`
-	PublicKey       string `json:"public_key"`
+	Format           string `json:"format"`
+	Version          int    `json:"version"`
+	SetID            string `json:"set_id"`
+	SourceName       string `json:"source_name"`
+	Part             int    `json:"part"`
+	TotalParts       int    `json:"total_parts"`
+	MaxPartSize      int64  `json:"max_part_size"`
+	PayloadOffset    int64  `json:"payload_offset"`
+	PayloadSize      int64  `json:"payload_size"`
+	StoredSize       int64  `json:"stored_size"`
+	PayloadSHA256    string `json:"payload_sha256"`
+	ScrambledSHA256  string `json:"scrambled_sha256"`
+	Nonce            string `json:"nonce"`
+	Scramble         string `json:"scramble"`
+	Compression      string `json:"compression,omitempty"`
+	CompressionLevel int    `json:"compression_level,omitempty"`
+	Encryption       string `json:"encryption"`
+	KDF              string `json:"kdf,omitempty"`
+	KDFSalt          string `json:"kdf_salt,omitempty"`
+	KDFMemory        uint32 `json:"kdf_memory_kib,omitempty"`
+	KDFTime          uint32 `json:"kdf_time,omitempty"`
+	KDFParallelism   uint8  `json:"kdf_parallelism,omitempty"`
+	EncryptionNonce  string `json:"encryption_nonce,omitempty"`
+	SignerName       string `json:"signer_name"`
+	SignerEmail      string `json:"signer_email"`
+	SignedAt         string `json:"signed_at"`
+	SignatureSalt    string `json:"signature_salt"`
+	Signature        string `json:"signature"`
+	PublicKey        string `json:"public_key"`
 }
 
 func canonicalManifest(m manifest) ([]byte, error) {

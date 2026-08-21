@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -175,6 +176,80 @@ func TestPackWithoutScrambling(t *testing.T) {
 	}
 	if !bytes.Equal(got, data) {
 		t.Fatal("plain round trip differs")
+	}
+}
+
+func TestPackCompressionAndShortFlags(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Compression Signer", "compression@example.com")
+	input := filepath.Join(t.TempDir(), "compressible.bin")
+	data := bytes.Repeat([]byte("sugyeol-compression-test\x00"), 80000)
+	if err := os.WriteFile(input, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefix := filepath.Join(t.TempDir(), "compressed")
+	const maxSize = int64(256 * 1024)
+	if err := run([]string{"pack", "-s", "256KiB", "-o", prefix, "-x=false", "-c", "highest", input}); err != nil {
+		t.Fatal(err)
+	}
+	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	if len(parts) == 0 {
+		t.Fatal("no compressed parts")
+	}
+	verified, err := verifyParts(parts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range verified {
+		if p.m.Compression != "deflate" || p.m.CompressionLevel != 9 {
+			t.Fatalf("compression manifest = %q level %d", p.m.Compression, p.m.CompressionLevel)
+		}
+		st, err := os.Stat(p.path)
+		if err != nil || st.Size() > maxSize {
+			t.Fatalf("compressed part size: %v, %v", st, err)
+		}
+	}
+	restore := t.TempDir()
+	if err := run(append([]string{"unpack", "-o", restore}, parts...)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(restore, "compressible.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("compressed round trip differs")
+	}
+	randomInput := filepath.Join(t.TempDir(), "incompressible.bin")
+	randomData := make([]byte, 2*1024*1024)
+	if _, err := crand.Read(randomData); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(randomInput, randomData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	randomPrefix := filepath.Join(t.TempDir(), "incompressible")
+	highest, _ := parseCompression("highest")
+	if err := packWithOptions(randomInput, randomPrefix, maxSize, false, nil, highest); err != nil {
+		t.Fatal(err)
+	}
+	randomParts, _ := filepath.Glob(randomPrefix + ".part-*.zip")
+	if _, err := verifyParts(randomParts, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range randomParts {
+		st, err := os.Stat(part)
+		if err != nil || st.Size() > maxSize {
+			t.Fatalf("incompressible part size: %v, %v", st, err)
+		}
+	}
+	for _, value := range []string{"none", "fastest", "default", "highest", "0", "1", "5", "9"} {
+		if _, err := parseCompression(value); err != nil {
+			t.Fatalf("parseCompression(%q): %v", value, err)
+		}
+	}
+	if _, err := parseCompression("10"); err == nil {
+		t.Fatal("invalid compression level was accepted")
 	}
 }
 

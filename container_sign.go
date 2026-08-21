@@ -43,6 +43,8 @@ func imageSignCommand(args []string) error {
 	fs := flag.NewFlagSet("image sign", flag.ContinueOnError)
 	out := fs.String("out", "", "output metadata path")
 	label := fs.String("label", "", "optional signed role/purpose label")
+	fs.StringVar(out, "o", "", "output metadata path")
+	fs.StringVar(label, "l", "", "optional signed role/purpose label")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -87,6 +89,9 @@ func imageVerifyCommand(args []string) error {
 	var pubkeys stringList
 	fs.Var(&pubkeys, "pubkey", "trusted public key (repeatable)")
 	minimum := fs.Int("min-signatures", 1, "minimum valid signatures")
+	fs.StringVar(image, "i", "", "override image reference")
+	fs.Var(&pubkeys, "k", "trusted public key (repeatable)")
+	fs.IntVar(minimum, "n", 1, "minimum valid signatures")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -131,6 +136,10 @@ func imageCountersignCommand(args []string) error {
 	var pubkeys stringList
 	fs.Var(&pubkeys, "pubkey", "trusted existing signer key (repeatable; at least one required)")
 	minimum := fs.Int("min-signatures", 1, "minimum existing signatures")
+	fs.StringVar(image, "i", "", "override image reference")
+	fs.StringVar(label, "l", "", "optional signed role/purpose label")
+	fs.Var(&pubkeys, "k", "trusted existing signer key (repeatable; at least one required)")
+	fs.IntVar(minimum, "n", 1, "minimum existing signatures")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

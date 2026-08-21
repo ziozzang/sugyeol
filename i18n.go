@@ -18,10 +18,11 @@ var messages = map[string]map[string]string{
 		"size_help":        "maximum part size (unitless values are MB; e.g. 10, 10MiB, 1GB)",
 		"out_help":         "output filename prefix",
 		"scramble_help":    "enable reversible payload scrambling",
+		"compression_help": "ZIP compression: none, fastest, default, highest, or 0..9",
 		"restore_help":     "restore destination directory",
 		"usage": `sugyeol - signed split ZIP creator/verifier/restorer
 
-  sugyeol [--lang en|ko] pack -size 10MiB [-scramble=true|-encrypt] -out backup <file|directory>
+  sugyeol [--lang en|ko] pack -s 10MiB [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <file|directory>
   sugyeol verify backup.part-*.zip
   sugyeol unpack -out <directory> backup.part-*.zip
   sugyeol sign -out source.meta <file|directory>
@@ -60,10 +61,11 @@ var messages = map[string]map[string]string{
 		"size_help":        "파트의 최대 크기 (단위 생략 시 MB; 예: 10, 10MiB, 1GB)",
 		"out_help":         "출력 파일 접두사",
 		"scramble_help":    "가역 payload 스크램블링 사용",
+		"compression_help": "ZIP 압축: none, fastest, default, highest 또는 0..9",
 		"restore_help":     "복구 대상 디렉터리",
 		"usage": `sugyeol - 서명된 분할 ZIP 생성/검사/복구
 
-  sugyeol [--lang en|ko] pack -size 10MiB [-scramble=true|-encrypt] -out backup <파일|디렉터리>
+  sugyeol [--lang en|ko] pack -s 10MiB [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <파일|디렉터리>
   sugyeol verify backup.part-*.zip
   sugyeol unpack -out <디렉터리> backup.part-*.zip
   sugyeol sign -out source.meta <파일|디렉터리>

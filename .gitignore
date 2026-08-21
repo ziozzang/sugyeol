@@ -2,3 +2,8 @@
 /packer
 /dist/
 /coverage.out
+
+# Local large test inputs and split-package outputs.
+/*.tar
+/*.part-*-of-*.zip
+/.sugyeol-*-restore-*/

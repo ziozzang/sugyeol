@@ -22,6 +22,9 @@ func updateCommand(args []string) error {
 	check := fs.Bool("check", false, "only check for a newer release")
 	force := fs.Bool("force", false, "reinstall even when already current")
 	target := fs.String("version", "", "install a specific release tag")
+	fs.BoolVar(check, "c", false, "only check for a newer release")
+	fs.BoolVar(force, "f", false, "reinstall even when already current")
+	fs.StringVar(target, "v", "", "install a specific release tag")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

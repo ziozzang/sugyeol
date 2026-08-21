@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-var version = "1.0.0"
+var version = "1.1.0"
 
 func main() {
 	startUpdateRefresh(os.Args[1:])
@@ -31,8 +31,15 @@ func run(args []string) error {
 		sizeText := fs.String("size", "100", tr("size_help"))
 		out := fs.String("out", "package", tr("out_help"))
 		scramble := fs.Bool("scramble", true, tr("scramble_help"))
+		compressionText := fs.String("compression", "none", tr("compression_help"))
 		encrypt := fs.Bool("encrypt", false, "encrypt payloads with a password (overrides scrambling)")
 		passwordFile := fs.String("password-file", "", "read encryption password from a 0600 file")
+		fs.StringVar(sizeText, "s", "100", tr("size_help"))
+		fs.StringVar(out, "o", "package", tr("out_help"))
+		fs.BoolVar(scramble, "x", true, tr("scramble_help"))
+		fs.StringVar(compressionText, "c", "none", tr("compression_help"))
+		fs.BoolVar(encrypt, "e", false, "encrypt payloads with a password (overrides scrambling)")
+		fs.StringVar(passwordFile, "p", "", "read encryption password from a 0600 file")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -43,24 +50,31 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		compression, err := parseCompression(*compressionText)
+		if err != nil {
+			return err
+		}
 		if *encrypt {
 			password, err := readEncryptionPassword(*passwordFile, true)
 			if err != nil {
 				return err
 			}
 			defer clearBytes(password)
-			return packWithPassword(fs.Arg(0), *out, sz, false, password)
+			return packWithOptions(fs.Arg(0), *out, sz, false, password, compression)
 		}
 		if *passwordFile != "" {
 			return errors.New("-password-file requires -encrypt")
 		}
-		return pack(fs.Arg(0), *out, sz, *scramble)
+		return packWithOptions(fs.Arg(0), *out, sz, *scramble, nil, compression)
 	case "verify":
 		fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 		source := fs.String("source", "", "source file/directory for a detached signature")
 		var pubkeys stringList
 		fs.Var(&pubkeys, "pubkey", "trusted public key PEM path or hex key (repeatable)")
 		minSignatures := fs.Int("min-signatures", 1, "minimum valid signatures required for detached metadata")
+		fs.StringVar(source, "s", "", "source file/directory for a detached signature")
+		fs.Var(&pubkeys, "k", "trusted public key PEM path or hex key (repeatable)")
+		fs.IntVar(minSignatures, "n", 1, "minimum valid signatures required for detached metadata")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -97,6 +111,9 @@ func run(args []string) error {
 		var pubkeys stringList
 		fs.Var(&pubkeys, "pubkey", "trusted public key PEM path or hex key (repeatable)")
 		minSignatures := fs.Int("min-signatures", 1, "minimum valid signatures")
+		fs.StringVar(source, "s", "", "source file/directory")
+		fs.Var(&pubkeys, "k", "trusted public key PEM path or hex key (repeatable)")
+		fs.IntVar(minSignatures, "n", 1, "minimum valid signatures")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -108,6 +125,8 @@ func run(args []string) error {
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		out := fs.String("out", ".", tr("restore_help"))
 		passwordFile := fs.String("password-file", "", "read decryption password from a 0600 file")
+		fs.StringVar(out, "o", ".", tr("restore_help"))
+		fs.StringVar(passwordFile, "p", "", "read decryption password from a 0600 file")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}

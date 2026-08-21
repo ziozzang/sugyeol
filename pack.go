@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"compress/flate"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,10 +14,14 @@ import (
 )
 
 func pack(source, outPrefix string, maxSize int64, scramble bool) error {
-	return packWithPassword(source, outPrefix, maxSize, scramble, nil)
+	return packWithOptions(source, outPrefix, maxSize, scramble, nil, compressionConfig{method: zip.Store})
 }
 
 func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, password []byte) error {
+	return packWithOptions(source, outPrefix, maxSize, scramble, password, compressionConfig{method: zip.Store})
+}
+
+func packWithOptions(source, outPrefix string, maxSize int64, scramble bool, password []byte, compression compressionConfig) error {
 	if maxSize <= metadataReserve {
 		return fmt.Errorf("파트 크기는 최소 %d 바이트보다 커야 합니다", metadataReserve)
 	}
@@ -33,7 +38,6 @@ func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, pa
 	if err != nil {
 		return err
 	}
-	payloadCap := maxSize - metadataReserve
 	var master []byte
 	kdfSalt := ""
 	if len(password) > 0 {
@@ -46,8 +50,8 @@ func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, pa
 			return err
 		}
 		defer clearBytes(master)
-		payloadCap = encryptionPayloadCapacity(maxSize)
 	}
+	payloadCap := packagePayloadCapacity(maxSize, len(master) > 0, compression)
 	if payloadCap <= 0 {
 		return fmt.Errorf("part size is too small for metadata")
 	}
@@ -80,7 +84,7 @@ func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, pa
 		if len(master) > 0 {
 			encryption = encryptionName
 		}
-		if err := writePart(name, tarFile, amount, manifest{
+		partManifest := manifest{
 			Format: formatName, Version: formatVersion, SetID: setID, SourceName: sourceName,
 			Part: part, TotalParts: total, MaxPartSize: maxSize, PayloadOffset: offset,
 			PayloadSize: amount, StoredSize: amount, Scramble: scrambleMethod, Encryption: encryption,
@@ -107,7 +111,9 @@ func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, pa
 				}
 				return 0
 			}(),
-		}, priv, pubPEM, identity, master); err != nil {
+		}
+		compression.apply(&partManifest)
+		if err := writePart(name, tarFile, amount, partManifest, priv, pubPEM, identity, master, compression); err != nil {
 			return err
 		}
 		created = append(created, name)
@@ -124,7 +130,7 @@ func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, pa
 	return nil
 }
 
-func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed25519.PrivateKey, pubPEM []byte, identity signingIdentity, master []byte) error {
+func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed25519.PrivateKey, pubPEM []byte, identity signingIdentity, master []byte, compression compressionConfig) error {
 	nonce, err := randomHex(16)
 	if err != nil {
 		return err
@@ -193,6 +199,11 @@ func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed2
 		}
 	}()
 	zw := zip.NewWriter(f)
+	if compression.method == zip.Deflate {
+		zw.RegisterCompressor(zip.Deflate, func(w io.Writer) (io.WriteCloser, error) {
+			return flate.NewWriter(w, compression.level)
+		})
+	}
 	entries := []struct {
 		name string
 		data []byte
@@ -210,7 +221,7 @@ func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed2
 			return err
 		}
 	}
-	h := &zip.FileHeader{Name: "payload.scrambled", Method: zip.Store}
+	h := &zip.FileHeader{Name: "payload.scrambled", Method: compression.method}
 	h.SetMode(0644)
 	w, err := zw.CreateHeader(h)
 	if err != nil {

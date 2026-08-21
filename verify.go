@@ -63,7 +63,7 @@ func verifyParts(paths []string, verbose bool) ([]verifiedPart, error) {
 		if p.m.Part != i+1 {
 			return nil, fmt.Errorf("파트 %d가 없거나 중복되었습니다", i+1)
 		}
-		if p.m.SetID != first.m.SetID || p.m.TotalParts != first.m.TotalParts || p.m.SourceName != first.m.SourceName || p.m.MaxPartSize != first.m.MaxPartSize || p.m.Encryption != first.m.Encryption || p.m.KDF != first.m.KDF || p.m.KDFSalt != first.m.KDFSalt || p.m.KDFMemory != first.m.KDFMemory || p.m.KDFTime != first.m.KDFTime || p.m.KDFParallelism != first.m.KDFParallelism {
+		if p.m.SetID != first.m.SetID || p.m.TotalParts != first.m.TotalParts || p.m.SourceName != first.m.SourceName || p.m.MaxPartSize != first.m.MaxPartSize || p.m.Compression != first.m.Compression || p.m.CompressionLevel != first.m.CompressionLevel || p.m.Encryption != first.m.Encryption || p.m.KDF != first.m.KDF || p.m.KDFSalt != first.m.KDFSalt || p.m.KDFMemory != first.m.KDFMemory || p.m.KDFTime != first.m.KDFTime || p.m.KDFParallelism != first.m.KDFParallelism {
 			return nil, fmt.Errorf("서로 다른 패키지의 파트가 섞여 있습니다")
 		}
 		if !bytes.Equal(p.publicKey, first.publicKey) {
@@ -116,6 +116,10 @@ func verifyPart(path string) (verifiedPart, error) {
 	}
 	if m.Encryption != "none" && m.Encryption != encryptionName {
 		return verifiedPart{}, fmt.Errorf("unsupported encryption")
+	}
+	compression, err := manifestCompression(m)
+	if err != nil {
+		return verifiedPart{}, err
 	}
 	if m.Encryption == encryptionName {
 		if m.Scramble != "none" || m.KDF != kdfName || m.KDFMemory != kdfMemory || m.KDFTime != kdfTime || m.KDFParallelism != kdfParallelism {
@@ -171,7 +175,7 @@ func verifyPart(path string) (verifiedPart, error) {
 	if payload == nil {
 		return verifiedPart{}, fmt.Errorf("payload.scrambled 항목 없음")
 	}
-	if payload.Method != zip.Store || payload.UncompressedSize64 != uint64(m.StoredSize) {
+	if payload.Method != compression.method || payload.UncompressedSize64 != uint64(m.StoredSize) {
 		return verifiedPart{}, fmt.Errorf("payload 크기/압축 방식 불일치")
 	}
 	r, err := payload.Open()

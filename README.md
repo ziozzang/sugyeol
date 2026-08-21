@@ -1,127 +1,189 @@
-# sugyeol
+# Sugyeol (수결)
 
-`sugyeol` (수결) is a single, statically linked Go binary for detached signatures, countersignature chains, container-image signatures, and signed split ZIP archives.
+English is the primary documentation. [한국어 문서](README_KO.md)
 
-Korean documentation: [README_KO.md](README_KO.md)
+Sugyeol is one statically linked Go binary for signed split ZIP packages, detached file/directory signatures, cumulative countersignatures, container-image signatures, verification, restoration, and self-update.
 
-## Build
+Current release: **v1.1.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+
+## Build and install
+
+Go 1.25 or newer is required to build. Release builds use `CGO_ENABLED=0`, `netgo`, and `osusergo`.
 
 ```sh
 make build
+./sugyeol version
+file ./sugyeol
 ```
 
-The build uses `CGO_ENABLED=0`, `netgo`, and `osusergo`. Linux release builds are checked with `file` to ensure that they are statically linked.
+`make release VERSION=1.1.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
-## Split archives
+## Initialize the signing identity
+
+Signing is refused until an identity and key have been initialized.
 
 ```sh
-# Required once before the first signing operation.
-sugyeol key init --name "Your Name" --email "you@example.com"
+sugyeol key init --name "Jane Doe" --email "jane@example.com"
+# Short form
+sugyeol key init -n "Jane Doe" -e "jane@example.com"
 
-# Default: 100 MB per part. Unitless values are MB.
-sugyeol pack -size 10 -scramble=true -out backup ./source
+sugyeol key --out jane-public.pem
+sugyeol key -o jane-public.pem
+```
+
+The Ed25519 private key is created only at `~/.sugyeol/ed25519_private.pem` with mode `0600`; `~/.sugyeol` is forced to `0700`. Identity metadata is stored in `~/.sugyeol/identity.json`. Sugyeol has no private-key export option and does not accept an alternate private-key path. Back up the home directory securely if key recovery is required.
+
+## Pack signed split ZIP files
+
+```sh
+# Defaults: 100 MB per part, scrambling on, no ZIP compression.
+sugyeol pack --out backup ./source
+
+# A unitless size is decimal MB. Every resulting ZIP is at most 1900 MB.
+sugyeol pack --size 1900 --out genos genos.tar
+
+# Equivalent short form, with compression and scrambling disabled.
+sugyeol pack -s 1900 -o genos -c highest -x=false genos.tar
+```
+
+Pack options:
+
+| Long | Short | Default | Meaning |
+|---|---:|---:|---|
+| `--size` | `-s` | `100` | Maximum size of each complete ZIP. Unitless values are decimal MB; `MiB`, `GB`, etc. are accepted. |
+| `--out` | `-o` | `package` | Output filename prefix. |
+| `--scramble` | `-x` | `true` | Reversible XOR/SHA-256-counter scrambling. Use `-x=false` to disable. This is not encryption. |
+| `--compression` | `-c` | `none` | ZIP payload compression: `none`, `fastest`, `default`, `highest`, or numeric `0..9`. |
+| `--encrypt` | `-e` | `false` | Password-based authenticated encryption; overrides scrambling. |
+| `--password-file` | `-p` | none | Read the password from a regular file whose permissions are `0600` or stricter. Requires encryption. |
+
+Compression mapping:
+
+| Value | ZIP method |
+|---|---|
+| `none`, `0` | Stored without compression; fastest and the default. |
+| `fastest`, `1` | DEFLATE level 1. |
+| `default` | Go DEFLATE default level. |
+| `2` through `8` | Exact DEFLATE level. |
+| `highest`, `9` | DEFLATE level 9. |
+
+Scrambled or encrypted bytes are intentionally high-entropy and normally do not compress. Compression is most useful with `--scramble=false` and no encryption. The selected method and level are included in the signed manifest. Capacity calculation reserves ZIP metadata, encryption tags, and conservative worst-case DEFLATE expansion; the complete file, not just its payload, is checked against `--size`.
+
+Every part is a normal `.zip` containing exactly:
+
+- `manifest.json`: signed set/part metadata, hashes, signer identity, time, salt, compression, scrambling, and encryption parameters.
+- `signature.ed25519`: signature of the canonical manifest.
+- `public_key.pem`: signing public key.
+- `payload.scrambled`: stored, compressed, scrambled, or encrypted TAR segment.
+
+## High-speed encryption
+
+```sh
+# Interactive input is hidden and never placed in process arguments.
+sugyeol pack -e -s 1900 -o secret ./source
+sugyeol unpack -o ./restored secret.part-*.zip
+
+# Automation
+chmod 600 ./password.txt
+sugyeol pack -e -p ./password.txt -o secret ./source
+sugyeol unpack -p ./password.txt -o ./restored secret.part-*.zip
+```
+
+Encryption uses 4 MiB streaming AES-256-GCM chunks. Argon2id derives one package master key using a random 128-bit salt, 19 MiB memory, two passes, and one lane; HMAC-SHA-256 derives separate per-part AES keys. Each chunk has an authentication tag. Password hashes are not stored. An incorrect password, modified ciphertext, changed manifest, or mixed/missing part is rejected before successful restoration.
+
+## Verify and restore packages
+
+```sh
 sugyeol verify backup.part-*.zip
-sugyeol unpack -out ./restored backup.part-*.zip
+sugyeol unpack --out ./restored backup.part-*.zip
+sugyeol unpack -o ./restored backup.part-*.zip
+
+# Pin the expected archive signer.
+sugyeol verify --pubkey jane-public.pem backup.part-*.zip
+sugyeol verify -k jane-public.pem backup.part-*.zip
 ```
 
-`-scramble=false` stores the TAR fragments without the reversible XOR/SHA-256 transformation. SHA-256 and Ed25519 protection remains enabled either way. Scrambling is not encryption and provides no confidentiality.
+Verification checks ZIP structure, canonical manifest encoding, Ed25519 signature, public-key consistency, SHA-256 payload hashes, part count/order/offsets, encryption/compression parameters, and the declared maximum size. Restoration repeats verification and then safely extracts the TAR while rejecting traversal paths, links, and unsupported entries.
 
-For confidentiality, enable high-speed authenticated encryption:
+## Detached file and directory signatures
 
 ```sh
-# Interactive password entry (entered twice, never placed in the process list).
-sugyeol pack -encrypt -size 100 -out secret ./source
-sugyeol unpack -out ./restored secret.part-*.zip
+sugyeol sign --label author --out source.meta ./source
+sugyeol sign -l author -o source.meta ./source
 
-# Automation: the password file must be a regular file with mode 0600 or stricter.
-sugyeol pack -encrypt -password-file ./password.txt -out secret ./source
-sugyeol unpack -password-file ./password.txt -out ./restored secret.part-*.zip
+sugyeol verify --source ./source --pubkey jane-public.pem source.meta
+sugyeol verify -s ./source -k jane-public.pem source.meta
 ```
 
-Encryption uses streaming 4 MiB AES-256-GCM chunks, allowing hardware acceleration without loading a whole part into memory. A 128-bit random salt and Argon2id (19 MiB, 2 passes) derive the key once per package. Every chunk has an authentication tag; KDF parameters, nonces, signer identity, hashes, and encryption mode are signed in each ZIP manifest. `-encrypt` supersedes scrambling. Password SHA values are deliberately not stored.
+The `.meta` JSON sidecar contains a canonical SHA-256 manifest and a signature chain. Directory manifests deterministically cover paths, modes, sizes, and content hashes. With no pinned `--pubkey`, cryptographic integrity is proven but signer identity is not; distribute public-key fingerprints through an independent trusted channel.
 
-Every independently readable ZIP part contains only:
+## Cumulative countersignatures
 
-- `manifest.json`
-- `signature.ed25519`
-- `public_key.pem`
-- `payload.scrambled`
-
-The signed ZIP manifest contains original/scrambled SHA-256 values plus the initialized signer name/email, signing time, and a fresh 128-bit signature salt. The complete ZIP, including metadata and signatures, never exceeds `-size`. Supported units are `B`, `KB`, `MB`, `GB`, `TB`, `KiB`, `MiB`, `GiB`, and `TiB`.
-
-## Detached signing
-
-Files and complete directory trees can be signed without creating an archive:
+A third party may add a signature only after the complete existing chain and current source have passed verification, and at least one existing signer is matched against an independently trusted public key.
 
 ```sh
-sugyeol sign -label author -out source.meta ./source
-sugyeol verify -source ./source source.meta
+sugyeol countersign \
+  --source ./source --pubkey author.pem --label reviewer source.meta
 
-# Pin a trusted key to prove signer identity, not only integrity.
-sugyeol key -out sugyeol-public.pem
-sugyeol verify -source ./source -pubkey sugyeol-public.pem source.meta
+sugyeol countersign -s ./source -k author.pem -l reviewer source.meta
+
+sugyeol verify -s ./source -n 2 \
+  -k author.pem -k reviewer.pem source.meta
 ```
 
-The `.meta` JSON sidecar contains the canonical SHA-256 manifest and a signature chain. Every record contains the signer's initialized name/email, optional role label, signing time, random 128-bit salt, public key, manifest digest, and previous-record digest. All these fields are covered by Ed25519. The manifest includes sorted relative paths, file types, modes, sizes, and per-file SHA-256 hashes.
+`endorse`, `cosign`, and `co-sign` are aliases of `countersign`. Each new record signs the manifest digest and previous record digest plus signer name/email, role label, UTC signing time, public key, and a fresh random 128-bit salt. More signatures do not create trust by themselves; pinned keys do.
 
-Additional parties can append signatures only after the existing chain and current source both verify:
+## Container-image signatures
 
 ```sh
-# Run with the third party's own ~/.sugyeol identity.
-sugyeol countersign -source ./source -label reviewer -pubkey author.pem source.meta
-
-# Require two valid signatures and both independently trusted keys.
-sugyeol verify -source ./source -min-signatures 2 \
-  -pubkey author.pem -pubkey reviewer.pem source.meta
+sugyeol image sign -l release -o app.image.meta registry.example.com/team/app:1.2.3
+sugyeol image verify -k release.pem app.image.meta
+sugyeol image countersign -k release.pem -l security-review app.image.meta
+sugyeol image verify -n 2 -k release.pem -k reviewer.pem app.image.meta
 ```
 
-Changing the source or any earlier record makes countersigning fail without modifying `.meta`. Countersigning also requires at least one trusted existing signer via `-pubkey`, preventing an internally consistent attacker-created chain from being signed accidentally. The aliases `endorse`, `cosign`, and `co-sign` are also accepted. More records alone do not create more trust; independent pinned keys do.
+Sugyeol resolves the exact OCI/Docker manifest bytes and signs their immutable `sha256` digest. A multi-platform index is signed as an index. Anonymous access, Docker `config.json` basic/identity credentials, and Bearer-token challenges are supported. v1.0 stores the portable signature as an `.image.meta` sidecar; it does not push an OCI Referrers artifact.
 
-Without `-pubkey`, verification proves that content still matches the embedded signing key but cannot establish who owns that key. Distribute the public-key fingerprint over a separate trusted channel.
-
-## Keys
-
-`sugyeol key init --name ... --email ...` creates the identity and private Ed25519 key. The private key exists only at `~/.sugyeol/ed25519_private.pem` with mode `0600`; `~/.sugyeol` is forced to mode `0700`. Identity metadata is stored in `~/.sugyeol/identity.json`. Signing is refused until initialization is complete. Private key export or alternate private-key locations are intentionally unsupported. Public keys are embedded in signed data and can be exported with `sugyeol key -out`.
-
-## Container image signing
-
-Sugyeol resolves an OCI/Docker registry tag to the exact manifest bytes and signs its immutable `sha256` digest. Multi-platform image indexes are signed as indexes rather than silently selecting one platform.
-
-```sh
-sugyeol image sign -label release registry.example.com/team/app:1.2.3
-sugyeol image verify -pubkey release.pem app-<digest>.image.meta
-
-# A second party verifies the remote manifest, existing chain, and trusted key first.
-sugyeol image countersign -pubkey release.pem -label security-review app-<digest>.image.meta
-sugyeol image verify -min-signatures 2 \
-  -pubkey release.pem -pubkey reviewer.pem app-<digest>.image.meta
-```
-
-Authentication supports anonymous registries and standard Docker `config.json` basic/identity credentials with Bearer-token challenges. The signed `.image.meta` is an independent portable sidecar. v1.0 does not push the sidecar as an OCI 1.1 Referrers artifact; this avoids claiming interoperability on registries that only implement the fallback tag scheme.
+Image-specific short options are `-o` (out), `-l` (label), `-i` (image override), `-k` (repeatable public key), and `-n` (minimum signatures).
 
 ## Internationalization
 
-English and Korean are selected from `SUGYEOL_LANG`, `LC_ALL`, `LC_MESSAGES`, or `LANG`. Override per invocation:
+English is the default. Korean is selected by `SUGYEOL_LANG`, `LC_ALL`, `LC_MESSAGES`, or `LANG`, in that order, or explicitly:
 
 ```sh
-sugyeol --lang ko help
 sugyeol --lang en help
+sugyeol --lang ko help
 ```
 
 ## Self-update
 
 ```sh
-sugyeol update --check
-sugyeol update
-sugyeol update --version v1.0.0
+sugyeol update --check       # short: -c
+sugyeol update --force       # short: -f
+sugyeol update --version v1.1.0  # short: -v v1.1.0
 ```
 
-The updater downloads the matching static binary from [GitHub Releases](https://github.com/ziozzang/sugyeol/releases), verifies it against the release `SHA256SUMS`, and atomically replaces the running executable. Interactive use performs a soft-failing release check at most once per 24 hours and only prints a notice; set `SUGYEOL_NO_UPDATE_CHECK=1` to disable it. Actual replacement always requires the explicit `sugyeol update` command.
+The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
 
-## Release build
+## Manual release process
+
+GitHub Actions are intentionally disabled. Build, test, inspect checksums, and publish manually:
 
 ```sh
-make release VERSION=1.0.0
+go test -race ./...
+go vet ./...
+make release VERSION=1.1.0
+(cd dist && sha256sum -c SHA256SUMS)
+
+gh release create v1.1.0 \
+  dist/sugyeol_1.1.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.1.0"
 ```
 
-This creates static Linux, macOS, and Windows artifacts for amd64 and arm64 plus `dist/SHA256SUMS`.
+## Security boundaries
+
+- Scrambling is obfuscation, not confidentiality; use `--encrypt` for secrets.
+- Public keys embedded in ZIP or `.meta` prove internal integrity, not real-world identity. Pin independently obtained keys with `--pubkey/-k`.
+- The private key never leaves `~/.sugyeol` through a Sugyeol command.
+- Compression is applied by ZIP after scrambling/encryption and is covered by the signed manifest.
+- v1.0 container signatures are local sidecars; registry artifact publication and key revocation infrastructure are outside the current scope.

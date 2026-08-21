@@ -62,6 +62,8 @@ func signCommand(args []string) error {
 	fs := flag.NewFlagSet("sign", flag.ContinueOnError)
 	out := fs.String("out", "", "detached metadata output (default: <source>.meta)")
 	label := fs.String("label", "", "optional signed role/purpose label")
+	fs.StringVar(out, "o", "", "detached metadata output (default: <source>.meta)")
+	fs.StringVar(label, "l", "", "optional signed role/purpose label")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -129,6 +131,8 @@ func keyCommand(args []string) error {
 		fs := flag.NewFlagSet("key init", flag.ContinueOnError)
 		name := fs.String("name", "", "signer name")
 		email := fs.String("email", "", "signer email")
+		fs.StringVar(name, "n", "", "signer name")
+		fs.StringVar(email, "e", "", "signer email")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -141,6 +145,7 @@ func keyCommand(args []string) error {
 	}
 	fs := flag.NewFlagSet("key", flag.ContinueOnError)
 	out := fs.String("out", "", "write the public key PEM to this path")
+	fs.StringVar(out, "o", "", "write the public key PEM to this path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -171,6 +176,11 @@ func countersignCommand(args []string) error {
 	var trustedKeys stringList
 	fs.Var(&trustedKeys, "pubkey", "trusted existing signer key (repeatable; at least one required)")
 	minPrior := fs.Int("min-signatures", 1, "minimum existing signatures required")
+	fs.StringVar(source, "s", "", "source file/directory (default: root_name in metadata)")
+	fs.StringVar(out, "o", "", "output metadata (default: replace the input metadata atomically)")
+	fs.StringVar(label, "l", "", "optional signed role/purpose label")
+	fs.Var(&trustedKeys, "k", "trusted existing signer key (repeatable; at least one required)")
+	fs.IntVar(minPrior, "n", 1, "minimum existing signatures required")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
