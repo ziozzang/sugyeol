@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	crand "crypto/rand"
 	"crypto/sha256"
@@ -298,6 +299,72 @@ func TestEncryptedPackRoundTripAndWrongPassword(t *testing.T) {
 	if err := unpackWithPassword(parts, t.TempDir(), []byte("definitely wrong password")); err == nil {
 		t.Fatal("wrong password was accepted")
 	}
+	literalPrefix := filepath.Join(t.TempDir(), "literal-password")
+	if err := run([]string{"pack", "-e", "-P", "literal-password-value", "-s", "6MiB", "-o", literalPrefix, input}); err != nil {
+		t.Fatal(err)
+	}
+	literalParts, _ := filepath.Glob(literalPrefix + ".part-*.zip")
+	literalRestore := t.TempDir()
+	literalArgs := []string{"unpack", "-P", "literal-password-value", "-o", literalRestore}
+	literalArgs = append(literalArgs, literalParts...)
+	if err := run(literalArgs); err != nil {
+		t.Fatal(err)
+	}
+	literalData, err := os.ReadFile(filepath.Join(literalRestore, "encrypted.bin"))
+	if err != nil || !bytes.Equal(literalData, data) {
+		t.Fatal("literal password CLI round trip differs")
+	}
+	if err := run([]string{"pack", "-e", "-P", "literal-password-value", "-p", filepath.Join(t.TempDir(), "password"), "-o", filepath.Join(t.TempDir(), "invalid"), input}); err == nil {
+		t.Fatal("password and password-file were accepted together")
+	}
+}
+
+func TestPackByExactPartCount(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Count Splitter", "count@example.com")
+	input := filepath.Join(t.TempDir(), "count.bin")
+	data := bytes.Repeat([]byte("exact-count-split"), 10000)
+	if err := os.WriteFile(input, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefix := filepath.Join(t.TempDir(), "counted")
+	if err := run([]string{"pack", "-n", "7", "-o", prefix, "-x=false", "-c", "highest", input}); err != nil {
+		t.Fatal(err)
+	}
+	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	if len(parts) != 7 {
+		t.Fatalf("parts = %d, want 7", len(parts))
+	}
+	verified, err := verifyParts(parts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minSize, maxSize := verified[0].m.PayloadSize, verified[0].m.PayloadSize
+	for _, part := range verified[1:] {
+		if part.m.PayloadSize < minSize {
+			minSize = part.m.PayloadSize
+		}
+		if part.m.PayloadSize > maxSize {
+			maxSize = part.m.PayloadSize
+		}
+	}
+	if maxSize-minSize > 1 {
+		t.Fatalf("count split is not balanced: min=%d max=%d", minSize, maxSize)
+	}
+	restore := t.TempDir()
+	if err := unpack(parts, restore); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(restore, "count.bin"))
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatal("count split round trip differs")
+	}
+	if err := run([]string{"pack", "-n", "2", "-s", "1MiB", "-o", filepath.Join(t.TempDir(), "invalid"), input}); err == nil {
+		t.Fatal("size and parts were accepted together")
+	}
+	if err := run([]string{"pack", "-n", "0", "-o", filepath.Join(t.TempDir(), "invalid-zero"), input}); err == nil {
+		t.Fatal("zero part count was accepted")
+	}
 }
 
 func TestDetachedDirectorySignature(t *testing.T) {
@@ -436,31 +503,55 @@ func TestCompareVersionsAndAssetNames(t *testing.T) {
 func TestContainerImageSignAndVerify(t *testing.T) {
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 	initTestIdentity(t, "Image Signer", "image@example.com")
-	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`)
+	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	layer := []byte("small compressed layer bytes")
+	configSum, layerSum := sha256.Sum256(config), sha256.Sum256(layer)
+	configDigest := "sha256:" + hex.EncodeToString(configSum[:])
+	layerDigest := "sha256:" + hex.EncodeToString(layerSum[:])
+	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":%q,"size":%d}]}`, configDigest, len(config), layerDigest, len(layer)))
+	manifestSum := sha256.Sum256(manifest)
+	manifestDigest := "sha256:" + hex.EncodeToString(manifestSum[:])
+	index := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d,"platform":{"os":"linux","architecture":"amd64"}}]}`, manifestDigest, len(manifest)))
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token" && r.Header.Get("Authorization") != "Bearer test-token" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+server.URL+`/token",service="test",scope="repository:team/app:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		switch r.URL.Path {
 		case "/token":
 			fmt.Fprint(w, `{"token":"test-token"}`)
 		case "/v2/team/app/manifests/latest":
-			if r.Header.Get("Authorization") != "Bearer test-token" {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="`+server.URL+`/token",service="test",scope="repository:team/app:pull"`)
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			d := sha256.Sum256(manifest)
-			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			d := sha256.Sum256(index)
+			w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
 			w.Header().Set("Docker-Content-Digest", "sha256:"+hex.EncodeToString(d[:]))
+			w.Write(index)
+		case "/v2/team/app/manifests/" + manifestDigest:
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
 			w.Write(manifest)
+		case "/v2/team/app/blobs/" + configDigest:
+			w.Write(config)
+		case "/v2/team/app/blobs/" + layerDigest:
+			w.Write(layer)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 	imageRef := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
+	archive := filepath.Join(t.TempDir(), "image.oci.tgz")
 	meta := filepath.Join(t.TempDir(), "image.meta")
-	if err := imageSignCommand([]string{"-out", meta, "-label", "release", imageRef}); err != nil {
+	if err := imagePullCommand([]string{"-o", archive, "-z", "-S", "-m", meta, "-l", "release", imageRef}); err != nil {
 		t.Fatal(err)
+	}
+	subject, err := inspectContainerArchive(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject.ArchiveFormat != "oci-image-layout" || subject.Compression != "gzip" || len(subject.RootDescriptors) != 1 {
+		t.Fatalf("unexpected local image subject: %+v", subject)
 	}
 	_, pub, _, err := loadSigningIdentity()
 	if err != nil {
@@ -470,12 +561,90 @@ func TestContainerImageSignAndVerify(t *testing.T) {
 	if err := os.WriteFile(pubPath, pub, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := imageVerifyCommand([]string{"-pubkey", pubPath, meta}); err != nil {
+	if err := imageVerifyCommand([]string{"-pubkey", pubPath, archive, meta}); err != nil {
 		t.Fatal(err)
 	}
-	manifest = append(manifest, '\n')
-	if err := imageVerifyCommand([]string{"-pubkey", pubPath, meta}); err == nil {
-		t.Fatal("changed remote manifest verified")
+	f, err := os.OpenFile(archive, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("changed")); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := imageVerifyCommand([]string{"-pubkey", pubPath, archive, meta}); err == nil {
+		t.Fatal("changed local archive verified")
+	}
+}
+
+func TestDockerSaveArchiveInspection(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Docker Archive Signer", "docker-archive@example.com")
+	archive := filepath.Join(t.TempDir(), "docker-image.tar")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	entries := map[string][]byte{
+		"config.json":     []byte(`{"architecture":"amd64","os":"linux"}`),
+		"layer/layer.tar": []byte("layer"),
+		"manifest.json":   []byte(`[{"Config":"config.json","RepoTags":["team/app:latest"],"Layers":["layer/layer.tar"]}]`),
+	}
+	for _, name := range []string{"config.json", "layer/layer.tar", "manifest.json"} {
+		data := entries[name]
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0644, Size: int64(len(data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	subject, err := inspectContainerArchive(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subject.ArchiveFormat != "docker-save" || len(subject.References) != 1 || subject.References[0] != "team/app:latest" {
+		t.Fatalf("unexpected docker archive subject: %+v", subject)
+	}
+	meta := filepath.Join(t.TempDir(), "docker.image.meta")
+	if err := imageSignCommand([]string{"-o", meta, archive}); err != nil {
+		t.Fatal(err)
+	}
+	_, pub, _, err := loadSigningIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubPath := filepath.Join(t.TempDir(), "docker.pem")
+	if err := os.WriteFile(pubPath, pub, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := imageVerifyCommand([]string{"-k", pubPath, archive, meta}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("HOME", filepath.Join(t.TempDir(), "reviewer-home")); err != nil {
+		t.Fatal(err)
+	}
+	initTestIdentity(t, "Docker Archive Reviewer", "docker-reviewer@example.com")
+	_, reviewerPub, _, err := loadSigningIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewerPath := filepath.Join(t.TempDir(), "reviewer.pem")
+	if err := os.WriteFile(reviewerPath, reviewerPub, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := imageCountersignCommand([]string{"-k", pubPath, "-l", "review", archive, meta}); err != nil {
+		t.Fatal(err)
+	}
+	if err := imageVerifyCommand([]string{"-n", "2", "-k", pubPath, "-k", reviewerPath, archive, meta}); err != nil {
+		t.Fatal(err)
 	}
 }
 

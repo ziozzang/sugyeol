@@ -5,5 +5,7 @@
 
 # Local large test inputs and split-package outputs.
 /*.tar
+/*.tgz
+/*.tar.gz
 /*.part-*-of-*.zip
 /.sugyeol-*-restore-*/

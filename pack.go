@@ -22,6 +22,10 @@ func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, pa
 }
 
 func packWithOptions(source, outPrefix string, maxSize int64, scramble bool, password []byte, compression compressionConfig) error {
+	return packWithOptionsAndParts(source, outPrefix, maxSize, scramble, password, compression, 0)
+}
+
+func packWithOptionsAndParts(source, outPrefix string, maxSize int64, scramble bool, password []byte, compression compressionConfig, requestedParts int) error {
 	if maxSize <= metadataReserve {
 		return fmt.Errorf("파트 크기는 최소 %d 바이트보다 커야 합니다", metadataReserve)
 	}
@@ -52,10 +56,24 @@ func packWithOptions(source, outPrefix string, maxSize int64, scramble bool, pas
 		defer clearBytes(master)
 	}
 	payloadCap := packagePayloadCapacity(maxSize, len(master) > 0, compression)
+	if requestedParts > 0 {
+		if int64(requestedParts) > tarSize {
+			return fmt.Errorf("cannot split %d-byte TAR payload into %d non-empty parts", tarSize, requestedParts)
+		}
+		payloadCap = (tarSize + int64(requestedParts) - 1) / int64(requestedParts)
+		largestStored := payloadCap
+		if len(master) > 0 {
+			largestStored = encryptedStoredSize(payloadCap)
+		}
+		maxSize = metadataReserve + compressedPayloadUpperBound(largestStored, compression)
+	}
 	if payloadCap <= 0 {
 		return fmt.Errorf("part size is too small for metadata")
 	}
 	total := int((tarSize + payloadCap - 1) / payloadCap)
+	if requestedParts > 0 {
+		total = requestedParts
+	}
 	if total < 1 {
 		total = 1
 	}
@@ -68,11 +86,14 @@ func packWithOptions(source, outPrefix string, maxSize int64, scramble bool, pas
 			}
 		}
 	}()
+	var offset int64
 	for part := 1; part <= total; part++ {
-		offset := int64(part-1) * payloadCap
 		remaining := tarSize - offset
 		amount := payloadCap
-		if remaining < amount {
+		if requestedParts > 0 {
+			partsRemaining := int64(total - part + 1)
+			amount = (remaining + partsRemaining - 1) / partsRemaining
+		} else if remaining < amount {
 			amount = remaining
 		}
 		name := fmt.Sprintf("%s.part-%06d-of-%06d.zip", outPrefix, part, total)
@@ -125,6 +146,7 @@ func packWithOptions(source, outPrefix string, maxSize int64, scramble bool, pas
 			return fmt.Errorf("내부 오류: %s가 최대 크기를 초과했습니다 (%d > %d)", name, st.Size(), maxSize)
 		}
 		fmt.Printf(tr("created"), name, st.Size())
+		offset += amount
 	}
 	ok = true
 	return nil

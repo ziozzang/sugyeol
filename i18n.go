@@ -16,20 +16,22 @@ var messages = map[string]map[string]string{
 		"verify_files":     "specify .zip parts to verify",
 		"unpack_files":     "specify .zip parts to restore",
 		"size_help":        "maximum part size (unitless values are MB; e.g. 10, 10MiB, 1GB)",
+		"parts_help":       "split into exactly this many non-empty parts (mutually exclusive with size)",
 		"out_help":         "output filename prefix",
 		"scramble_help":    "enable reversible payload scrambling",
 		"compression_help": "ZIP compression: none, fastest, default, highest, or 0..9",
 		"restore_help":     "restore destination directory",
 		"usage": `sugyeol - signed split ZIP creator/verifier/restorer
 
-  sugyeol [--lang en|ko] pack -s 10MiB [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <file|directory>
+  sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <file|directory>
   sugyeol verify backup.part-*.zip
   sugyeol unpack -out <directory> backup.part-*.zip
   sugyeol sign -out source.meta <file|directory>
   sugyeol countersign -source <file|directory> -pubkey trusted.pem source.meta
   sugyeol verify -source <file|directory> source.meta
-  sugyeol image sign <registry/repository:tag>
-  sugyeol image verify <image.meta>
+  sugyeol image pull [-S] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image sign <image.tar|image.tgz>
+  sugyeol image verify <image.tar|image.tgz> [image.meta]
   sugyeol key init --name <name> --email <email>
   sugyeol key [-out public_key.pem]
   sugyeol update [--check]`,
@@ -59,20 +61,22 @@ var messages = map[string]map[string]string{
 		"verify_files":     "검사할 .zip 파트를 지정하세요",
 		"unpack_files":     "복구할 .zip 파트를 지정하세요",
 		"size_help":        "파트의 최대 크기 (단위 생략 시 MB; 예: 10, 10MiB, 1GB)",
+		"parts_help":       "비어 있지 않은 파트를 정확히 이 개수로 생성 (size와 동시 사용 불가)",
 		"out_help":         "출력 파일 접두사",
 		"scramble_help":    "가역 payload 스크램블링 사용",
 		"compression_help": "ZIP 압축: none, fastest, default, highest 또는 0..9",
 		"restore_help":     "복구 대상 디렉터리",
 		"usage": `sugyeol - 서명된 분할 ZIP 생성/검사/복구
 
-  sugyeol [--lang en|ko] pack -s 10MiB [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <파일|디렉터리>
+  sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <파일|디렉터리>
   sugyeol verify backup.part-*.zip
   sugyeol unpack -out <디렉터리> backup.part-*.zip
   sugyeol sign -out source.meta <파일|디렉터리>
   sugyeol countersign -source <파일|디렉터리> -pubkey trusted.pem source.meta
   sugyeol verify -source <파일|디렉터리> source.meta
-  sugyeol image sign <registry/repository:tag>
-  sugyeol image verify <image.meta>
+  sugyeol image pull [-S] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image sign <image.tar|image.tgz>
+  sugyeol image verify <image.tar|image.tgz> [image.meta]
   sugyeol key init --name <이름> --email <이메일>
   sugyeol key [-out public_key.pem]
   sugyeol update [--check]`,

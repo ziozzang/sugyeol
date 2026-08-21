@@ -80,6 +80,15 @@ func readEncryptionPassword(path string, confirm bool) ([]byte, error) {
 	return first, nil
 }
 
+func passwordBytes(value string) ([]byte, error) {
+	b := []byte(value)
+	if len(b) < 8 {
+		clearBytes(b)
+		return nil, fmt.Errorf("encryption password must be at least 8 bytes")
+	}
+	return b, nil
+}
+
 func clearBytes(b []byte) {
 	for i := range b {
 		b[i] = 0

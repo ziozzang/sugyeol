@@ -8,12 +8,15 @@ import (
 	"strings"
 )
 
-var version = "1.1.0"
+var version = "1.2.0"
 
 func main() {
 	startUpdateRefresh(os.Args[1:])
 	defer maybeNotifyUpdate(os.Args[1:])
 	if err := run(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, "sugyeol:", err)
 		os.Exit(1)
 	}
@@ -28,23 +31,35 @@ func run(args []string) error {
 	switch args[0] {
 	case "pack":
 		fs := flag.NewFlagSet("pack", flag.ContinueOnError)
+		sizeWasSet := packSizeFlagSpecified(args[1:])
+		partsWasSet := packPartsFlagSpecified(args[1:])
 		sizeText := fs.String("size", "100", tr("size_help"))
+		partsCount := fs.Int("parts", 0, tr("parts_help"))
 		out := fs.String("out", "package", tr("out_help"))
 		scramble := fs.Bool("scramble", true, tr("scramble_help"))
 		compressionText := fs.String("compression", "none", tr("compression_help"))
 		encrypt := fs.Bool("encrypt", false, "encrypt payloads with a password (overrides scrambling)")
 		passwordFile := fs.String("password-file", "", "read encryption password from a 0600 file")
+		passwordText := fs.String("password", "", "encryption password (may be exposed in process listings and shell history)")
 		fs.StringVar(sizeText, "s", "100", tr("size_help"))
+		fs.IntVar(partsCount, "n", 0, tr("parts_help"))
 		fs.StringVar(out, "o", "package", tr("out_help"))
 		fs.BoolVar(scramble, "x", true, tr("scramble_help"))
 		fs.StringVar(compressionText, "c", "none", tr("compression_help"))
 		fs.BoolVar(encrypt, "e", false, "encrypt payloads with a password (overrides scrambling)")
 		fs.StringVar(passwordFile, "p", "", "read encryption password from a 0600 file")
+		fs.StringVar(passwordText, "P", "", "encryption password (may be exposed in process listings and shell history)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
 			return errors.New(tr("pack_usage"))
+		}
+		if partsWasSet && (*partsCount < 1 || *partsCount > 100000) {
+			return errors.New("-parts must be between 1 and 100000")
+		}
+		if *partsCount > 0 && sizeWasSet {
+			return errors.New("-size and -parts are mutually exclusive")
 		}
 		sz, err := parseSize(*sizeText)
 		if err != nil {
@@ -55,17 +70,25 @@ func run(args []string) error {
 			return err
 		}
 		if *encrypt {
-			password, err := readEncryptionPassword(*passwordFile, true)
+			if *passwordText != "" && *passwordFile != "" {
+				return errors.New("-password and -password-file are mutually exclusive")
+			}
+			var password []byte
+			if *passwordText != "" {
+				password, err = passwordBytes(*passwordText)
+			} else {
+				password, err = readEncryptionPassword(*passwordFile, true)
+			}
 			if err != nil {
 				return err
 			}
 			defer clearBytes(password)
-			return packWithOptions(fs.Arg(0), *out, sz, false, password, compression)
+			return packWithOptionsAndParts(fs.Arg(0), *out, sz, false, password, compression, *partsCount)
 		}
-		if *passwordFile != "" {
-			return errors.New("-password-file requires -encrypt")
+		if *passwordFile != "" || *passwordText != "" {
+			return errors.New("-password and -password-file require -encrypt")
 		}
-		return packWithOptions(fs.Arg(0), *out, sz, *scramble, nil, compression)
+		return packWithOptionsAndParts(fs.Arg(0), *out, sz, *scramble, nil, compression, *partsCount)
 	case "verify":
 		fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 		source := fs.String("source", "", "source file/directory for a detached signature")
@@ -125,8 +148,10 @@ func run(args []string) error {
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		out := fs.String("out", ".", tr("restore_help"))
 		passwordFile := fs.String("password-file", "", "read decryption password from a 0600 file")
+		passwordText := fs.String("password", "", "decryption password (may be exposed in process listings and shell history)")
 		fs.StringVar(out, "o", ".", tr("restore_help"))
 		fs.StringVar(passwordFile, "p", "", "read decryption password from a 0600 file")
+		fs.StringVar(passwordText, "P", "", "decryption password (may be exposed in process listings and shell history)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -135,7 +160,12 @@ func run(args []string) error {
 		}
 		var password []byte
 		var err error
-		if *passwordFile != "" {
+		if *passwordText != "" && *passwordFile != "" {
+			return errors.New("-password and -password-file are mutually exclusive")
+		}
+		if *passwordText != "" {
+			password, err = passwordBytes(*passwordText)
+		} else if *passwordFile != "" {
 			password, err = readEncryptionPassword(*passwordFile, false)
 			if err != nil {
 				return err
@@ -155,6 +185,24 @@ func run(args []string) error {
 		usage()
 		return fmt.Errorf(tr("unknown_command"), args[0])
 	}
+}
+
+func packSizeFlagSpecified(args []string) bool {
+	for _, arg := range args {
+		if arg == "-s" || arg == "--size" || arg == "-size" || strings.HasPrefix(arg, "-s=") || strings.HasPrefix(arg, "--size=") || strings.HasPrefix(arg, "-size=") {
+			return true
+		}
+	}
+	return false
+}
+
+func packPartsFlagSpecified(args []string) bool {
+	for _, arg := range args {
+		if arg == "-n" || arg == "--parts" || arg == "-parts" || strings.HasPrefix(arg, "-n=") || strings.HasPrefix(arg, "--parts=") || strings.HasPrefix(arg, "-parts=") {
+			return true
+		}
+	}
+	return false
 }
 
 func usage() {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"flag"
@@ -17,17 +16,20 @@ import (
 const containerSignatureFormat = "sugyeol-container-signature"
 
 type containerSignatureBundle struct {
-	Format  string             `json:"format"`
-	Version int                `json:"version"`
-	Image   remoteImageSubject `json:"image"`
-	Records []signatureRecord  `json:"records"`
+	Format  string              `json:"format"`
+	Version int                 `json:"version"`
+	Archive *localImageSubject  `json:"archive,omitempty"`
+	Image   *remoteImageSubject `json:"image,omitempty"`
+	Records []signatureRecord   `json:"records"`
 }
 
 func imageCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: sugyeol image <sign|verify|countersign> ...")
+		return fmt.Errorf("usage: sugyeol image <pull|sign|verify|countersign> ...")
 	}
 	switch args[0] {
+	case "pull", "download", "export":
+		return imagePullCommand(args[1:])
 	case "sign":
 		return imageSignCommand(args[1:])
 	case "verify":
@@ -49,11 +51,10 @@ func imageSignCommand(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: sugyeol image sign [-out image.meta] <image:tag>")
+		return fmt.Errorf("usage: sugyeol image sign [-out image.meta] <image.tar|image.tgz>")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	subject, err := resolveRemoteImage(ctx, nil, fs.Arg(0))
+	archivePath := fs.Arg(0)
+	subject, err := inspectContainerArchive(archivePath)
 	if err != nil {
 		return err
 	}
@@ -70,50 +71,50 @@ func imageSignCommand(args []string) error {
 		return err
 	}
 	if *out == "" {
-		*out = defaultImageMetaName(subject)
+		*out = defaultLocalImageMetaName(archivePath)
 	}
 	if _, err := os.Stat(*out); err == nil {
 		return fmt.Errorf("metadata already exists; countersign it instead: %s", *out)
 	}
-	bundle := containerSignatureBundle{Format: containerSignatureFormat, Version: 1, Image: subject, Records: []signatureRecord{rec}}
+	bundle := containerSignatureBundle{Format: containerSignatureFormat, Version: 2, Archive: &subject, Records: []signatureRecord{rec}}
 	if err := writeContainerSignatureBundle(*out, bundle); err != nil {
 		return err
 	}
-	fmt.Printf("container image signed: %s\ndigest: %s\nmetadata: %s\n", subject.Reference, subject.Digest, *out)
+	fmt.Printf("container archive signed: %s\narchive sha256: %s\nmetadata: %s\n", archivePath, subject.ArchiveSHA256, *out)
 	return nil
 }
 
 func imageVerifyCommand(args []string) error {
 	fs := flag.NewFlagSet("image verify", flag.ContinueOnError)
-	image := fs.String("image", "", "override image reference")
 	var pubkeys stringList
 	fs.Var(&pubkeys, "pubkey", "trusted public key (repeatable)")
 	minimum := fs.Int("min-signatures", 1, "minimum valid signatures")
-	fs.StringVar(image, "i", "", "override image reference")
 	fs.Var(&pubkeys, "k", "trusted public key (repeatable)")
 	fs.IntVar(minimum, "n", 1, "minimum valid signatures")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: sugyeol image verify [flags] <image.meta>")
+	if fs.NArg() < 1 || fs.NArg() > 2 {
+		return fmt.Errorf("usage: sugyeol image verify [flags] <image.tar|image.tgz> [image.meta]")
 	}
-	bundle, canonical, err := loadContainerSignatureBundle(fs.Arg(0))
+	archivePath := fs.Arg(0)
+	metaPath := defaultLocalImageMetaName(archivePath)
+	if fs.NArg() == 2 {
+		metaPath = fs.Arg(1)
+	}
+	bundle, canonical, err := loadContainerSignatureBundle(metaPath)
 	if err != nil {
 		return err
 	}
-	ref := *image
-	if ref == "" {
-		ref = bundle.Image.Reference
+	if bundle.Archive == nil {
+		return fmt.Errorf("metadata signs a remote reference, not a local container archive")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	actual, err := resolveRemoteImage(ctx, nil, ref)
+	actual, err := inspectContainerArchive(archivePath)
 	if err != nil {
 		return err
 	}
-	if !sameRemoteImage(bundle.Image, actual) {
-		return fmt.Errorf("container image manifest changed: signed %s, current %s", bundle.Image.Digest, actual.Digest)
+	if !sameLocalImage(*bundle.Archive, actual) {
+		return fmt.Errorf("container archive or manifest graph changed: signed %s, current %s", bundle.Archive.ArchiveSHA256, actual.ArchiveSHA256)
 	}
 	pubs, err := verifySignatureChain(canonical, bundle.Records)
 	if err != nil {
@@ -122,7 +123,7 @@ func imageVerifyCommand(args []string) error {
 	if err := checkSignaturePolicy(pubs, pubkeys, *minimum); err != nil {
 		return err
 	}
-	printImageSignatures(bundle, pubs)
+	printLocalImageSignatures(bundle, pubs, archivePath)
 	if len(pubkeys) == 0 {
 		fmt.Fprintln(os.Stderr, tr("unpinned_warning"))
 	}
@@ -131,25 +132,32 @@ func imageVerifyCommand(args []string) error {
 
 func imageCountersignCommand(args []string) error {
 	fs := flag.NewFlagSet("image countersign", flag.ContinueOnError)
-	image := fs.String("image", "", "override image reference")
+	out := fs.String("out", "", "output metadata (default: replace metadata atomically)")
 	label := fs.String("label", "", "optional signed role/purpose label")
 	var pubkeys stringList
 	fs.Var(&pubkeys, "pubkey", "trusted existing signer key (repeatable; at least one required)")
 	minimum := fs.Int("min-signatures", 1, "minimum existing signatures")
-	fs.StringVar(image, "i", "", "override image reference")
+	fs.StringVar(out, "o", "", "output metadata (default: replace metadata atomically)")
 	fs.StringVar(label, "l", "", "optional signed role/purpose label")
 	fs.Var(&pubkeys, "k", "trusted existing signer key (repeatable; at least one required)")
 	fs.IntVar(minimum, "n", 1, "minimum existing signatures")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: sugyeol image countersign -pubkey trusted.pem <image.meta>")
+	if fs.NArg() < 1 || fs.NArg() > 2 {
+		return fmt.Errorf("usage: sugyeol image countersign -pubkey trusted.pem <image.tar|image.tgz> [image.meta]")
 	}
-	path := fs.Arg(0)
-	bundle, canonical, err := loadContainerSignatureBundle(path)
+	archivePath := fs.Arg(0)
+	metaPath := defaultLocalImageMetaName(archivePath)
+	if fs.NArg() == 2 {
+		metaPath = fs.Arg(1)
+	}
+	bundle, canonical, err := loadContainerSignatureBundle(metaPath)
 	if err != nil {
 		return err
+	}
+	if bundle.Archive == nil {
+		return fmt.Errorf("metadata signs a remote reference, not a local container archive")
 	}
 	pubs, err := verifySignatureChain(canonical, bundle.Records)
 	if err != nil {
@@ -161,18 +169,12 @@ func imageCountersignCommand(args []string) error {
 	if err := checkSignaturePolicy(pubs, pubkeys, *minimum); err != nil {
 		return err
 	}
-	ref := *image
-	if ref == "" {
-		ref = bundle.Image.Reference
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	actual, err := resolveRemoteImage(ctx, nil, ref)
+	actual, err := inspectContainerArchive(archivePath)
 	if err != nil {
 		return err
 	}
-	if !sameRemoteImage(bundle.Image, actual) {
-		return fmt.Errorf("container image manifest changed")
+	if !sameLocalImage(*bundle.Archive, actual) {
+		return fmt.Errorf("container archive or manifest graph changed")
 	}
 	priv, _, identity, err := loadSigningIdentity()
 	if err != nil {
@@ -184,10 +186,14 @@ func imageCountersignCommand(args []string) error {
 		return err
 	}
 	bundle.Records = append(bundle.Records, rec)
-	if err := writeContainerSignatureBundle(path, bundle); err != nil {
+	destination := metaPath
+	if *out != "" {
+		destination = *out
+	}
+	if err := writeContainerSignatureBundle(destination, bundle); err != nil {
 		return err
 	}
-	fmt.Printf("container countersignature %d added: %s\n", len(bundle.Records), path)
+	fmt.Printf("container countersignature %d added: %s\n", len(bundle.Records), destination)
 	return nil
 }
 
@@ -205,10 +211,18 @@ func loadContainerSignatureBundle(path string) (containerSignatureBundle, []byte
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return bundle, nil, fmt.Errorf("trailing data in container metadata")
 	}
-	if bundle.Format != containerSignatureFormat || bundle.Version != 1 || bundle.Image.Format != "sugyeol-container-image" {
+	if bundle.Format != containerSignatureFormat || (bundle.Version != 1 && bundle.Version != 2) {
 		return bundle, nil, fmt.Errorf("unsupported container signature format")
 	}
-	canonical, err := json.MarshalIndent(bundle.Image, "", "  ")
+	var subject any
+	if bundle.Version == 1 && bundle.Image != nil && bundle.Image.Format == "sugyeol-container-image" {
+		subject = bundle.Image
+	} else if bundle.Version == 2 && bundle.Archive != nil && bundle.Archive.Format == containerArchiveFormat {
+		subject = bundle.Archive
+	} else {
+		return bundle, nil, fmt.Errorf("container signature subject does not match its version")
+	}
+	canonical, err := json.MarshalIndent(subject, "", "  ")
 	return bundle, canonical, err
 }
 
@@ -252,19 +266,27 @@ func writeContainerSignatureBundle(path string, bundle containerSignatureBundle)
 	return nil
 }
 
-func sameRemoteImage(signed, actual remoteImageSubject) bool {
-	return signed.Registry == actual.Registry && signed.Repository == actual.Repository && signed.Digest == actual.Digest && signed.MediaType == actual.MediaType && signed.ManifestSize == actual.ManifestSize && signed.ManifestSHA256 == actual.ManifestSHA256
+func sameLocalImage(signed, actual localImageSubject) bool {
+	actual.ArchiveFile = signed.ArchiveFile
+	signedBytes, err1 := json.Marshal(signed)
+	actualBytes, err2 := json.Marshal(actual)
+	return err1 == nil && err2 == nil && bytes.Equal(signedBytes, actualBytes)
 }
-func defaultImageMetaName(subject remoteImageSubject) string {
-	base := filepath.Base(subject.Repository)
-	short := strings.TrimPrefix(subject.Digest, "sha256:")
-	if len(short) > 12 {
-		short = short[:12]
+
+func defaultLocalImageMetaName(archivePath string) string {
+	base := archivePath
+	lower := strings.ToLower(base)
+	for _, suffix := range []string{".tar.gz", ".tgz", ".tar"} {
+		if strings.HasSuffix(lower, suffix) {
+			base = base[:len(base)-len(suffix)]
+			break
+		}
 	}
-	return base + "-" + short + ".image.meta"
+	return base + ".image.meta"
 }
-func printImageSignatures(bundle containerSignatureBundle, pubs []ed25519.PublicKey) {
-	fmt.Printf("container image signature OK: %s\ndigest: %s\n", bundle.Image.ResolvedReference, bundle.Image.Digest)
+
+func printLocalImageSignatures(bundle containerSignatureBundle, pubs []ed25519.PublicKey, archivePath string) {
+	fmt.Printf("container archive signature OK: %s\narchive sha256: %s\nformat: %s\n", archivePath, bundle.Archive.ArchiveSHA256, bundle.Archive.ArchiveFormat)
 	for i, rec := range bundle.Records {
 		who := rec.SignerName + " <" + rec.SignerEmail + ">"
 		if rec.SignerLabel != "" {
