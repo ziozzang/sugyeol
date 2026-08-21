@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-var version = "1.3.0"
+var version = "1.4.0"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -147,6 +147,12 @@ func run(args []string) error {
 			if err := verifyPinnedPartKey(parts, pubkey); err != nil {
 				return err
 			}
+		}
+		if err := printPackageVerification(os.Stdout, parts, len(pubkeys) > 0); err != nil {
+			return err
+		}
+		if len(pubkeys) == 0 {
+			fmt.Fprintln(os.Stderr, tr("unpinned_warning"))
 		}
 		return nil
 	case "sign":

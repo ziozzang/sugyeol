@@ -58,6 +58,9 @@ func makeTar(source string) (*os.File, int64, string, error) {
 		if fi.IsDir() && !strings.HasSuffix(h.Name, "/") {
 			h.Name += "/"
 		}
+		if err := addFileTimesToHeader(path, fi, h); err != nil {
+			return err
+		}
 		if err := tw.WriteHeader(h); err != nil {
 			return err
 		}
@@ -123,10 +126,11 @@ func extractTar(r io.Reader, dest string) error {
 		return err
 	}
 	tr := tar.NewReader(r)
+	directories := make([]restoredMetadata, 0)
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			break
 		}
 		if err != nil {
 			return fmt.Errorf("TAR 읽기: %w", err)
@@ -141,9 +145,14 @@ func extractTar(r io.Reader, dest string) error {
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, os.FileMode(h.Mode)&0777); err != nil {
+			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
+			metadata, err := metadataFromHeader(target, h)
+			if err != nil {
+				return err
+			}
+			directories = append(directories, metadata)
 		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
@@ -160,6 +169,13 @@ func extractTar(r io.Reader, dest string) error {
 			if closeErr != nil {
 				return closeErr
 			}
+			metadata, err := metadataFromHeader(target, h)
+			if err != nil {
+				return err
+			}
+			if err := applyRestoredMetadata(metadata); err != nil {
+				return err
+			}
 		case tar.TypeSymlink:
 			// 링크 자체가 대상 디렉터리 안에 있어도 링크 값이 밖을 가리킬 수 있으므로 거부한다.
 			return fmt.Errorf("보안을 위해 심볼릭 링크 복구를 거부합니다: %q", h.Name)
@@ -167,4 +183,10 @@ func extractTar(r io.Reader, dest string) error {
 			return fmt.Errorf("지원하지 않는 TAR 항목 형식 %d: %q", h.Typeflag, h.Name)
 		}
 	}
+	for i := len(directories) - 1; i >= 0; i-- {
+		if err := applyRestoredMetadata(directories[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }

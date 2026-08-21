@@ -81,6 +81,8 @@ func imageSignCommand(args []string) error {
 		return err
 	}
 	fmt.Printf("container archive signed: %s\narchive sha256: %s\nmetadata: %s\n", archivePath, subject.ArchiveSHA256, *out)
+	pub := priv.Public().(ed25519.PublicKey)
+	printSignatureRecordDetails(os.Stdout, []signatureRecord{rec}, []ed25519.PublicKey{pub}, rec.Index, nil, false)
 	return nil
 }
 
@@ -120,10 +122,11 @@ func imageVerifyCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSignaturePolicy(pubs, pubkeys, *minimum); err != nil {
+	trusted, err := checkSignaturePolicyWithTrust(pubs, pubkeys, *minimum)
+	if err != nil {
 		return err
 	}
-	printLocalImageSignatures(bundle, pubs, archivePath)
+	printLocalImageSignatures(bundle, pubs, trusted, len(pubkeys) > 0, archivePath)
 	if len(pubkeys) == 0 {
 		fmt.Fprintln(os.Stderr, tr("unpinned_warning"))
 	}
@@ -194,6 +197,8 @@ func imageCountersignCommand(args []string) error {
 		return err
 	}
 	fmt.Printf("container countersignature %d added: %s\n", len(bundle.Records), destination)
+	pub := priv.Public().(ed25519.PublicKey)
+	printSignatureRecordDetails(os.Stdout, []signatureRecord{rec}, []ed25519.PublicKey{pub}, rec.Index, nil, false)
 	return nil
 }
 
@@ -285,13 +290,8 @@ func defaultLocalImageMetaName(archivePath string) string {
 	return base + ".image.meta"
 }
 
-func printLocalImageSignatures(bundle containerSignatureBundle, pubs []ed25519.PublicKey, archivePath string) {
+func printLocalImageSignatures(bundle containerSignatureBundle, pubs []ed25519.PublicKey, trusted map[string]bool, pinningConfigured bool, archivePath string) {
 	fmt.Printf("container archive signature OK: %s\narchive sha256: %s\nformat: %s\n", archivePath, bundle.Archive.ArchiveSHA256, bundle.Archive.ArchiveFormat)
-	for i, rec := range bundle.Records {
-		who := rec.SignerName + " <" + rec.SignerEmail + ">"
-		if rec.SignerLabel != "" {
-			who += " [" + rec.SignerLabel + "]"
-		}
-		fmt.Printf("signature %d/%d: %s at %s (%s)\n", i+1, len(bundle.Records), who, rec.SignedAt.Format(time.RFC3339), publicFingerprint(pubs[i]))
-	}
+	fmt.Printf(tr("container_signed_subject"), len(bundle.Archive.RootDescriptors), len(bundle.Archive.References), len(bundle.Records))
+	printSignatureRecordDetails(os.Stdout, bundle.Records, pubs, len(bundle.Records), trusted, pinningConfigured)
 }

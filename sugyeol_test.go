@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,9 +15,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProgressVerboseDebugAndCancellation(t *testing.T) {
@@ -58,7 +61,7 @@ func TestProgressVerboseDebugAndCancellation(t *testing.T) {
 	if _, err := parseGlobalUIArgs([]string{"--progress=invalid", "version"}); err == nil {
 		t.Fatal("invalid progress mode was accepted")
 	}
-	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.3.0"}); got != "update" {
+	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.4.0"}); got != "update" {
 		t.Fatalf("effective command = %q", got)
 	}
 }
@@ -72,6 +75,84 @@ func TestParseSizeDefaultIsMB(t *testing.T) {
 	if err != nil || got != 10<<20 {
 		t.Fatalf("parseSize(10MiB) = %d, %v", got, err)
 	}
+}
+
+func TestTarPreservesFilesystemMetadata(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "metadata.bin")
+	if err := os.WriteFile(source, []byte("metadata preservation"), 0641); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(source, 0641); err != nil {
+		t.Fatal(err)
+	}
+	accessTime := time.Date(2020, 2, 3, 4, 5, 6, 123456789, time.UTC)
+	modTime := time.Date(2021, 3, 4, 5, 6, 7, 987654321, time.UTC)
+	if err := os.Chtimes(source, accessTime, modTime); err != nil {
+		t.Fatal(err)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sourceBirth, sourceHasBirth, err := platformFileTimes(source, sourceInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarFile, _, _, err := makeTar(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		tarFile.Close()
+		os.Remove(tarFile.Name())
+	}()
+	header, err := tar.NewReader(tarFile).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && os.FileMode(header.Mode)&os.ModePerm != 0641 {
+		t.Fatalf("archived mode = %o", header.Mode)
+	}
+	if !timestampsClose(header.ModTime, modTime) || !timestampsClose(header.AccessTime, accessTime) {
+		t.Fatalf("archived times: mtime=%s atime=%s", header.ModTime, header.AccessTime)
+	}
+	if sourceHasBirth && header.PAXRecords[sugyeolBirthTimePAX] == "" {
+		t.Fatal("creation time was not retained in PAX metadata")
+	}
+	if _, err := tarFile.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	restore := t.TempDir()
+	if err := extractTar(tarFile, restore); err != nil {
+		t.Fatal(err)
+	}
+	restored := filepath.Join(restore, "metadata.bin")
+	restoredInfo, err := os.Stat(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && restoredInfo.Mode().Perm() != 0641 {
+		t.Fatalf("restored mode = %o", restoredInfo.Mode().Perm())
+	}
+	restoredAccess, restoredBirth, restoredHasBirth, err := platformFileTimes(restored, restoredInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !timestampsClose(restoredInfo.ModTime(), modTime) || !timestampsClose(restoredAccess, accessTime) {
+		t.Fatalf("restored times: mtime=%s atime=%s", restoredInfo.ModTime(), restoredAccess)
+	}
+	if sourceHasBirth && restoredHasBirth && (runtime.GOOS == "darwin" || runtime.GOOS == "windows") && !timestampsClose(restoredBirth, sourceBirth) {
+		t.Fatalf("restored creation time = %s, want %s", restoredBirth, sourceBirth)
+	}
+}
+
+func timestampsClose(a, b time.Time) bool {
+	delta := a.Sub(b)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= time.Second
 }
 
 func initTestIdentity(t *testing.T, name, email string) {
@@ -128,6 +209,15 @@ func TestPackVerifyUnpackRoundTrip(t *testing.T) {
 			t.Fatal("ZIP signed identity metadata missing")
 		}
 	}
+	var packageSummary bytes.Buffer
+	if err := printPackageVerification(&packageSummary, verifiedParts, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Test Signer <test@example.com>", "trusted (matched a pinned public key)", "ed25519 + sha256", "signed from:", "fingerprint:"} {
+		if !strings.Contains(packageSummary.String(), want) {
+			t.Fatalf("package verification summary lacks %q: %s", want, packageSummary.String())
+		}
+	}
 	restore := t.TempDir()
 	if err := unpack(parts, restore); err != nil {
 		t.Fatal(err)
@@ -149,6 +239,55 @@ func TestPackVerifyUnpackRoundTrip(t *testing.T) {
 	identityInfo, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".sugyeol", "identity.json"))
 	if err != nil || identityInfo.Mode().Perm() != 0600 {
 		t.Fatalf("identity mode: %v, %v", identityInfo, err)
+	}
+}
+
+func TestSignatureDetailsIncludeIdentityTimeChainAndTrust(t *testing.T) {
+	originalLanguage := currentLanguage
+	defer func() { currentLanguage = originalLanguage }()
+	setLanguage("en")
+	pub, priv, err := ed25519.GenerateKey(crand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte("signed manifest")
+	at := time.Date(2026, 8, 21, 12, 34, 56, 789, time.UTC)
+	rec, err := makeChainRecord(manifest, nil, 1, signingIdentity{Name: "Alice", Email: "alice@example.com"}, "release", priv, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted := map[string]bool{publicFingerprint(pub): true}
+	var output bytes.Buffer
+	printSignatureRecordDetails(&output, []signatureRecord{rec}, []ed25519.PublicKey{pub}, 1, trusted, true)
+	text := output.String()
+	for _, want := range []string{
+		"Alice <alice@example.com>", "release", at.Format(time.RFC3339Nano), "ed25519",
+		hex.EncodeToString(pub), publicFingerprint(pub), rec.ManifestSHA256, rec.Salt,
+		recordDigest(rec), rec.Signature, "(genesis signature)", "trusted (matched a pinned public key)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("signature details lack %q: %s", want, text)
+		}
+	}
+	pub2, priv2, err := ed25519.GenerateKey(crand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec2, err := makeChainRecord(manifest, &rec, 2, signingIdentity{Name: "Bob", Email: "bob@example.com"}, "review", priv2, at.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	printSignatureRecordDetails(&output, []signatureRecord{rec, rec2}, []ed25519.PublicKey{pub, pub2}, 2, trusted, true)
+	for _, want := range []string{"signature 2/2", "Bob <bob@example.com>", recordDigest(rec), "chain-valid, but this signer is not directly pinned"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("chain signature details lack %q: %s", want, output.String())
+		}
+	}
+	badTime := rec
+	badTime.SignedAt = time.Time{}
+	if _, err := verifySignatureChain(manifest, []signatureRecord{badTime}); err == nil || !strings.Contains(err.Error(), "signing time") {
+		t.Fatalf("missing signing time was not rejected: %v", err)
 	}
 }
 

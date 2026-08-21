@@ -121,8 +121,7 @@ func signCommand(args []string) error {
 		return closeErr
 	}
 	fmt.Printf(tr("signed"), source, *out)
-	fmt.Printf(tr("public_key"), hex.EncodeToString(pub))
-	fmt.Printf(tr("fingerprint"), publicFingerprint(pub))
+	printSignatureRecordDetails(os.Stdout, []signatureRecord{rec}, []ed25519.PublicKey{pub}, rec.Index, nil, false)
 	return nil
 }
 
@@ -232,8 +231,7 @@ func countersignCommand(args []string) error {
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	fmt.Printf("countersignature %d added: %s\n", len(bundle.Records), destination)
-	fmt.Printf(tr("public_key"), hex.EncodeToString(pub))
-	fmt.Printf(tr("fingerprint"), publicFingerprint(pub))
+	printSignatureRecordDetails(os.Stdout, []signatureRecord{rec}, []ed25519.PublicKey{pub}, rec.Index, nil, false)
 	return nil
 }
 
@@ -384,20 +382,13 @@ func verifyDetached(signaturePath, source string, pinnedPaths []string, minSigna
 	if err != nil {
 		return err
 	}
-	if err := checkSignaturePolicy(pubs, pinnedPaths, minSignatures); err != nil {
+	trusted, err := checkSignaturePolicyWithTrust(pubs, pinnedPaths, minSignatures)
+	if err != nil {
 		return err
 	}
 	fmt.Printf(tr("signature_ok"), source)
-	for i, rec := range bundle.Records {
-		fmt.Printf("signature %d/%d\n", i+1, len(bundle.Records))
-		who := rec.SignerName + " <" + rec.SignerEmail + ">"
-		if rec.SignerLabel != "" {
-			who += " [" + rec.SignerLabel + "]"
-		}
-		fmt.Printf(tr("signer"), who)
-		fmt.Printf(tr("signed_at"), rec.SignedAt.Format(time.RFC3339))
-		fmt.Printf(tr("fingerprint"), publicFingerprint(pubs[i]))
-	}
+	fmt.Printf(tr("signed_subject"), bundle.Manifest.RootName, len(bundle.Manifest.Entries), len(bundle.Records))
+	printSignatureRecordDetails(os.Stdout, bundle.Records, pubs, len(bundle.Records), trusted, len(pinnedPaths) > 0)
 	if len(pinnedPaths) == 0 {
 		fmt.Fprintln(os.Stderr, tr("unpinned_warning"))
 	}
@@ -405,29 +396,71 @@ func verifyDetached(signaturePath, source string, pinnedPaths []string, minSigna
 }
 
 func checkSignaturePolicy(pubs []ed25519.PublicKey, pinnedPaths []string, minimum int) error {
+	_, err := checkSignaturePolicyWithTrust(pubs, pinnedPaths, minimum)
+	return err
+}
+
+func checkSignaturePolicyWithTrust(pubs []ed25519.PublicKey, pinnedPaths []string, minimum int) (map[string]bool, error) {
 	if minimum < 1 {
 		minimum = 1
 	}
 	if len(pubs) < minimum {
-		return fmt.Errorf("signature policy requires %d signatures, found %d", minimum, len(pubs))
+		return nil, fmt.Errorf("signature policy requires %d signatures, found %d", minimum, len(pubs))
 	}
+	trusted := make(map[string]bool, len(pinnedPaths))
 	for _, path := range pinnedPaths {
 		pinned, err := loadPinnedPublicKey(path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		found := false
 		for _, pub := range pubs {
 			if pub.Equal(pinned) {
 				found = true
+				trusted[publicFingerprint(pub)] = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("trusted public key %s is not present in the signature chain", path)
+			return nil, fmt.Errorf("trusted public key %s is not present in the signature chain", path)
 		}
 	}
-	return nil
+	return trusted, nil
+}
+
+func printSignatureRecordDetails(w io.Writer, records []signatureRecord, pubs []ed25519.PublicKey, chainTotal int, trusted map[string]bool, pinningConfigured bool) {
+	for i, rec := range records {
+		pub := pubs[i]
+		fingerprint := publicFingerprint(pub)
+		trust := tr("signature_trust_unpinned")
+		if trusted[fingerprint] {
+			trust = tr("signature_trust_pinned")
+		} else if pinningConfigured {
+			trust = tr("signature_trust_chain")
+		}
+		previous := rec.PreviousRecordSHA256
+		if previous == "" {
+			previous = tr("signature_genesis")
+		}
+		role := rec.SignerLabel
+		if role == "" {
+			role = tr("signature_role_none")
+		}
+		fmt.Fprintf(w, tr("signature_detail_header"), rec.Index, chainTotal)
+		fmt.Fprintf(w, tr("signature_crypto_status"), tr("signature_valid"))
+		fmt.Fprintf(w, tr("signature_trust"), trust)
+		fmt.Fprintf(w, tr("signature_signer"), rec.SignerName+" <"+rec.SignerEmail+">")
+		fmt.Fprintf(w, tr("signature_role"), role)
+		fmt.Fprintf(w, tr("signature_signed_at"), rec.SignedAt.UTC().Format(time.RFC3339Nano))
+		fmt.Fprintf(w, tr("signature_algorithm"), rec.Algorithm)
+		fmt.Fprintf(w, tr("signature_public_key"), rec.PublicKey)
+		fmt.Fprintf(w, tr("signature_fingerprint"), fingerprint)
+		fmt.Fprintf(w, tr("signature_manifest_sha"), rec.ManifestSHA256)
+		fmt.Fprintf(w, tr("signature_previous_sha"), previous)
+		fmt.Fprintf(w, tr("signature_record_sha"), recordDigest(rec))
+		fmt.Fprintf(w, tr("signature_salt"), rec.Salt)
+		fmt.Fprintf(w, tr("signature_value"), rec.Signature)
+	}
 }
 
 func makeChainRecord(manifest []byte, previous *signatureRecord, index int, identity signingIdentity, label string, priv ed25519.PrivateKey, at time.Time) (signatureRecord, error) {
@@ -470,8 +503,11 @@ func verifySignatureChain(manifest []byte, records []signatureRecord) ([]ed25519
 		if rec.ManifestSHA256 != manifestDigest || rec.PreviousRecordSHA256 != previous {
 			return nil, fmt.Errorf("signature chain link %d is broken", i+1)
 		}
-		if rec.SignerName == "" || rec.SignerEmail == "" {
+		if strings.TrimSpace(rec.SignerName) == "" || strings.TrimSpace(rec.SignerEmail) == "" || !strings.Contains(rec.SignerEmail, "@") {
 			return nil, fmt.Errorf("signature %d has no signer identity", i+1)
+		}
+		if rec.SignedAt.IsZero() {
+			return nil, fmt.Errorf("signature %d has no signing time", i+1)
 		}
 		if _, err := decodeNonce(rec.Salt); err != nil {
 			return nil, fmt.Errorf("signature %d has invalid salt", i+1)

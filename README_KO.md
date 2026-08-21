@@ -24,7 +24,7 @@
 
 ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
-현재 릴리스는 **v1.3.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
+현재 릴리스는 **v1.4.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## 빌드와 설치
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.3.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+`make release VERSION=1.4.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
 
 ## 진행률·상세 출력·디버그·취소
 
@@ -156,6 +156,24 @@ sugyeol verify -k hong-public.pem backup.part-*.zip
 
 검사는 ZIP 구조, canonical manifest, Ed25519 서명, 파트 공개키 일치, SHA-256, 파트 개수·순서·offset, 압축·암호화 매개변수, 최대 파일 크기를 확인합니다. 복구는 이를 다시 확인한 뒤 TAR 경로 탈출, 링크, 지원하지 않는 항목을 거부하면서 안전하게 풉니다.
 
+복구 시 각 파일과 디렉터리의 권한 mode, 수정 시각(mtime), 접근 시각(atime)도 다시 적용합니다. 자식 파일 생성으로 디렉터리 시각이 바뀌지 않도록 디렉터리 메타데이터는 마지막에 역순으로 복원합니다. 생성 시각(birth/creation time)은 서명 대상인 PAX 메타데이터에 보존하며 Windows와 macOS에서는 실제로 복원합니다. Linux는 파일시스템 birth time을 설정하는 API가 없으므로 패키지 안에는 보존하지만 복구된 inode에는 적용할 수 없습니다. Unix의 `ctime`은 생성 시각이 아니라 inode 변경 시각이므로 위조하지 않습니다. 소유권, ACL, 확장 속성, device node, 심볼릭 링크는 권한 의존성과 안전 문제 때문에 복원하지 않습니다. `--verbose`에서 복원한 메타데이터와 플랫폼 제약을 확인할 수 있습니다.
+
+### 서명자와 신뢰 상태 보고
+
+검증 성공 시 단순히 `서명 검증 완료`만 출력하지 않고 누가 무엇에 서명했고 그 신원을 어떻게 신뢰했는지 감사할 수 있는 메타데이터를 보여줍니다.
+
+- 서명자 이름·이메일, 선택적 역할/라벨, nanosecond 정밀도의 UTC 서명 시각
+- Ed25519 공개키와 SHA-256 지문
+- 서명 알고리즘과 서명값, manifest SHA-256, 서명된 임의 salt, 레코드 SHA-256, 이전 레코드 SHA-256
+- 서명 체인 위치와 최초 서명의 `genesis` 표시
+- `고정한 공개키와 일치`, `체인은 유효하지만 직접 고정하지 않음`, `내장 공개키만 확인` 신뢰 상태
+
+분할 ZIP 검증은 패키지 set ID, 원본명, 파트 수, TAR payload 크기, 스크램블링·암호화·압축 설정, 서명자, 공개키/지문과 최초·마지막 파트 서명 시각을 출력합니다. `--verbose`에서는 모든 파트의 서명 시각, salt, 원본 payload SHA-256과 저장 payload SHA-256도 보여줍니다. 한 패키지의 모든 파트는 동일한 서명자 이름·이메일·공개키를 가져야 합니다.
+
+sign과 countersign 명령도 방금 생성한 레코드의 동일한 메타데이터를 출력합니다. 화면에 표시된 이름·이메일은 서명된 데이터이지만 `--pubkey/-k`로 공개키를 고정했을 때만 독립적으로 신뢰한 신원이 됩니다.
+
+서명 시각은 외부 timestamp authority의 증명이 아니라 서명자 로컬 시계에서 가져온 서명된 주장입니다. 이후 시각 값의 변조는 탐지하지만 서명 당시 시계가 정확했다는 사실까지 독립적으로 증명하지는 않습니다.
+
 ## 파일·디렉터리 독립 서명
 
 ```sh
@@ -232,7 +250,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check          # 단축: -c
 sugyeol update --force          # 단축: -f
-sugyeol update --version v1.3.0 # 단축: -v v1.3.0
+sugyeol update --version v1.4.0 # 단축: -v v1.4.0
 ```
 
 현재 플랫폼용 GitHub Release 자산을 받고 `SHA256SUMS`를 확인한 뒤 실행 파일을 원자 교체합니다. 대화형 실행은 최대 24시간에 한 번 실패 허용 방식으로 새 버전 알림만 확인하며 실제 교체에는 항상 `sugyeol update`가 필요합니다. `SUGYEOL_NO_UPDATE_CHECK=1`로 알림 확인을 끌 수 있습니다.
@@ -244,12 +262,12 @@ GitHub Actions는 의도적으로 비활성화했습니다. 직접 빌드·테�
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.3.0
+make release VERSION=1.4.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.3.0 \
-  dist/sugyeol_1.3.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.3.0"
+gh release create v1.4.0 \
+  dist/sugyeol_1.4.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.0"
 ```
 
 ## 보안 경계

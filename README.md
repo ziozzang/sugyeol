@@ -24,7 +24,7 @@ registry image ─────── native pull ──> OCI tar/tgz ──> sig
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.3.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+Current release: **v1.4.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## Build and install
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.3.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.4.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
 ## Progress, verbose output, debug output, and cancellation
 
@@ -157,6 +157,24 @@ sugyeol verify -k jane-public.pem backup.part-*.zip
 
 Verification checks ZIP structure, canonical manifest encoding, Ed25519 signature, public-key consistency, SHA-256 payload hashes, part count/order/offsets, encryption/compression parameters, and the declared maximum size. Restoration repeats verification and then safely extracts the TAR while rejecting traversal paths, links, and unsupported entries.
 
+Restoration also reapplies each file and directory's permission mode, modification time, and access time. Directory metadata is applied after its children so extraction does not disturb the original directory timestamps. Creation/birth time is retained in signed PAX metadata: Windows and macOS restore it, while Linux preserves it in the archive but cannot apply it because Linux exposes no API for setting filesystem birth time. Unix `ctime` is inode change time, not creation time, and is intentionally not forged. Ownership, ACLs, extended attributes, device nodes, and symbolic links are not restored; this avoids privilege-dependent or unsafe extraction behavior. Use `--verbose` to see restored metadata and any platform limitation.
+
+### Signer and trust report
+
+Successful verification does not stop at `signature OK`. Sugyeol prints enough signed metadata to audit who signed what and how that identity was trusted:
+
+- signer name and email, optional role/label, and UTC signing time with nanosecond precision;
+- Ed25519 public key and SHA-256 fingerprint;
+- signature algorithm and value, manifest SHA-256, signed random salt, record SHA-256, and previous-record SHA-256;
+- signature-chain position and `genesis` marker for the first signature;
+- `trusted (matched a pinned public key)`, `chain-valid but not directly pinned`, or `embedded key only` trust status.
+
+Split ZIP verification reports the package set ID, source, part count, TAR payload size, scrambling/encryption/compression configuration, signer, public key/fingerprint, and first/last part-signing times. `--verbose` additionally prints every part's signing time, salt, payload SHA-256, and stored-payload SHA-256. Every package part must carry the same signer name/email and public key.
+
+Signing and countersigning commands print the same metadata for the record they just created. A displayed name or email is signed data, but it becomes an independently trusted identity only when the key is pinned with `--pubkey/-k`.
+
+The signing time is a signed claim from the signer's local clock, not proof from an external timestamp authority. The signature detects later changes to that value; it cannot independently prove that the clock was accurate when signing.
+
 ## Detached file and directory signatures
 
 ```sh
@@ -233,7 +251,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.3.0  # short: -v v1.3.0
+sugyeol update --version v1.4.0  # short: -v v1.4.0
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -245,12 +263,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.3.0
+make release VERSION=1.4.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.3.0 \
-  dist/sugyeol_1.3.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.3.0"
+gh release create v1.4.0 \
+  dist/sugyeol_1.4.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.0"
 ```
 
 ## Security boundaries

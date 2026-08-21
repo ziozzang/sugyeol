@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -67,7 +68,7 @@ func verifyParts(paths []string, verbose bool) ([]verifiedPart, error) {
 		if p.m.Part != i+1 {
 			return nil, fmt.Errorf("파트 %d가 없거나 중복되었습니다", i+1)
 		}
-		if p.m.SetID != first.m.SetID || p.m.TotalParts != first.m.TotalParts || p.m.SourceName != first.m.SourceName || p.m.MaxPartSize != first.m.MaxPartSize || p.m.Compression != first.m.Compression || p.m.CompressionLevel != first.m.CompressionLevel || p.m.Encryption != first.m.Encryption || p.m.KDF != first.m.KDF || p.m.KDFSalt != first.m.KDFSalt || p.m.KDFMemory != first.m.KDFMemory || p.m.KDFTime != first.m.KDFTime || p.m.KDFParallelism != first.m.KDFParallelism {
+		if p.m.SetID != first.m.SetID || p.m.TotalParts != first.m.TotalParts || p.m.SourceName != first.m.SourceName || p.m.MaxPartSize != first.m.MaxPartSize || p.m.Scramble != first.m.Scramble || p.m.Compression != first.m.Compression || p.m.CompressionLevel != first.m.CompressionLevel || p.m.Encryption != first.m.Encryption || p.m.KDF != first.m.KDF || p.m.KDFSalt != first.m.KDFSalt || p.m.KDFMemory != first.m.KDFMemory || p.m.KDFTime != first.m.KDFTime || p.m.KDFParallelism != first.m.KDFParallelism || p.m.SignerName != first.m.SignerName || p.m.SignerEmail != first.m.SignerEmail {
 			return nil, fmt.Errorf("서로 다른 패키지의 파트가 섞여 있습니다")
 		}
 		if !bytes.Equal(p.publicKey, first.publicKey) {
@@ -76,9 +77,71 @@ func verifyParts(paths []string, verbose bool) ([]verifiedPart, error) {
 		if p.m.PayloadOffset != expectedOffset {
 			return nil, fmt.Errorf("파트 %d의 payload offset이 연속적이지 않습니다", p.m.Part)
 		}
+		if p.m.PayloadSize > 0 && expectedOffset > (1<<63-1)-p.m.PayloadSize {
+			return nil, fmt.Errorf("package payload size overflow")
+		}
 		expectedOffset += p.m.PayloadSize
 	}
 	return parts, nil
+}
+
+func printPackageVerification(w io.Writer, parts []verifiedPart, pinned bool) error {
+	if len(parts) == 0 {
+		return fmt.Errorf("no verified package parts")
+	}
+	first := parts[0]
+	pub, err := parsePublicPEM(first.publicKey)
+	if err != nil {
+		return err
+	}
+	firstSigned, err := time.Parse(time.RFC3339Nano, first.m.SignedAt)
+	if err != nil {
+		return err
+	}
+	lastSigned := firstSigned
+	var payloadBytes int64
+	for _, p := range parts {
+		at, err := time.Parse(time.RFC3339Nano, p.m.SignedAt)
+		if err != nil {
+			return err
+		}
+		if at.Before(firstSigned) {
+			firstSigned = at
+		}
+		if at.After(lastSigned) {
+			lastSigned = at
+		}
+		if p.m.PayloadSize > 0 && payloadBytes > (1<<63-1)-p.m.PayloadSize {
+			return fmt.Errorf("package payload size overflow")
+		}
+		payloadBytes += p.m.PayloadSize
+	}
+	trust := tr("signature_trust_unpinned")
+	if pinned {
+		trust = tr("signature_trust_pinned")
+	}
+	fmt.Fprintf(w, tr("package_signature_ok"), first.m.SourceName)
+	fmt.Fprintf(w, tr("package_subject"), first.m.SetID, len(parts), humanSize(payloadBytes))
+	compression := first.m.Compression
+	if compression == "" {
+		compression = "none"
+	} else {
+		compression = fmt.Sprintf("%s(level=%d)", compression, first.m.CompressionLevel)
+	}
+	fmt.Fprintf(w, tr("package_protection"), first.m.Scramble, first.m.Encryption, compression)
+	fmt.Fprintf(w, tr("signature_crypto_status"), tr("package_signatures_valid", len(parts), len(parts)))
+	fmt.Fprintf(w, tr("signature_trust"), trust)
+	fmt.Fprintf(w, tr("signature_signer"), first.m.SignerName+" <"+first.m.SignerEmail+">")
+	fmt.Fprintf(w, tr("signed_at_range"), firstSigned.UTC().Format(time.RFC3339Nano), lastSigned.UTC().Format(time.RFC3339Nano))
+	fmt.Fprintf(w, tr("signature_algorithm"), "ed25519 + sha256")
+	fmt.Fprintf(w, tr("signature_public_key"), hex.EncodeToString(pub))
+	fmt.Fprintf(w, tr("signature_fingerprint"), publicFingerprint(pub))
+	if ui.verbose {
+		for _, p := range parts {
+			fmt.Fprintf(w, tr("package_part_detail"), p.m.Part, p.m.TotalParts, p.m.SignedAt, p.m.SignatureSalt, p.m.PayloadSHA256, p.m.ScrambledSHA256)
+		}
+	}
+	return nil
 }
 
 func verifyPart(path string) (verifiedPart, error) {
@@ -141,7 +204,7 @@ func verifyPart(path string) (verifiedPart, error) {
 	} else if m.StoredSize != m.PayloadSize {
 		return verifiedPart{}, fmt.Errorf("invalid stored payload size")
 	}
-	if m.SignerName == "" || m.SignerEmail == "" || m.SignedAt == "" {
+	if strings.TrimSpace(m.SignerName) == "" || strings.TrimSpace(m.SignerEmail) == "" || !strings.Contains(m.SignerEmail, "@") || m.SignedAt == "" {
 		return verifiedPart{}, fmt.Errorf("missing signed identity metadata")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, m.SignedAt); err != nil {
