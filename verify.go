@@ -63,7 +63,7 @@ func verifyParts(paths []string, verbose bool) ([]verifiedPart, error) {
 		if p.m.Part != i+1 {
 			return nil, fmt.Errorf("파트 %d가 없거나 중복되었습니다", i+1)
 		}
-		if p.m.SetID != first.m.SetID || p.m.TotalParts != first.m.TotalParts || p.m.SourceName != first.m.SourceName || p.m.MaxPartSize != first.m.MaxPartSize {
+		if p.m.SetID != first.m.SetID || p.m.TotalParts != first.m.TotalParts || p.m.SourceName != first.m.SourceName || p.m.MaxPartSize != first.m.MaxPartSize || p.m.Encryption != first.m.Encryption || p.m.KDF != first.m.KDF || p.m.KDFSalt != first.m.KDFSalt || p.m.KDFMemory != first.m.KDFMemory || p.m.KDFTime != first.m.KDFTime || p.m.KDFParallelism != first.m.KDFParallelism {
 			return nil, fmt.Errorf("서로 다른 패키지의 파트가 섞여 있습니다")
 		}
 		if !bytes.Equal(p.publicKey, first.publicKey) {
@@ -108,11 +108,30 @@ func verifyPart(path string) (verifiedPart, error) {
 	if m.Format != formatName || m.Version != formatVersion {
 		return verifiedPart{}, fmt.Errorf("지원하지 않는 포맷/버전")
 	}
-	if m.Part < 1 || m.TotalParts < 1 || m.Part > m.TotalParts || m.PayloadSize < 0 || m.PayloadOffset < 0 {
+	if m.Part < 1 || m.TotalParts < 1 || m.Part > m.TotalParts || m.PayloadSize < 0 || m.StoredSize < 0 || m.PayloadOffset < 0 {
 		return verifiedPart{}, fmt.Errorf("잘못된 manifest 값")
 	}
 	if m.Signature != "signature.ed25519" || m.PublicKey != "public_key.pem" || (m.Scramble != "xor-sha256-counter-v1" && m.Scramble != "none") {
 		return verifiedPart{}, fmt.Errorf("지원하지 않는 manifest 구성")
+	}
+	if m.Encryption != "none" && m.Encryption != encryptionName {
+		return verifiedPart{}, fmt.Errorf("unsupported encryption")
+	}
+	if m.Encryption == encryptionName {
+		if m.Scramble != "none" || m.KDF != kdfName || m.KDFMemory != kdfMemory || m.KDFTime != kdfTime || m.KDFParallelism != kdfParallelism {
+			return verifiedPart{}, fmt.Errorf("invalid encryption parameters")
+		}
+		if _, err := hex.DecodeString(m.KDFSalt); err != nil || len(m.KDFSalt) != 32 {
+			return verifiedPart{}, fmt.Errorf("invalid KDF salt")
+		}
+		if _, err := hex.DecodeString(m.EncryptionNonce); err != nil || len(m.EncryptionNonce) != 24 {
+			return verifiedPart{}, fmt.Errorf("invalid encryption nonce")
+		}
+		if m.StoredSize != encryptedStoredSize(m.PayloadSize) {
+			return verifiedPart{}, fmt.Errorf("invalid encrypted payload size")
+		}
+	} else if m.StoredSize != m.PayloadSize {
+		return verifiedPart{}, fmt.Errorf("invalid stored payload size")
 	}
 	if m.SignerName == "" || m.SignerEmail == "" || m.SignedAt == "" {
 		return verifiedPart{}, fmt.Errorf("missing signed identity metadata")
@@ -152,7 +171,7 @@ func verifyPart(path string) (verifiedPart, error) {
 	if payload == nil {
 		return verifiedPart{}, fmt.Errorf("payload.scrambled 항목 없음")
 	}
-	if payload.Method != zip.Store || payload.UncompressedSize64 != uint64(m.PayloadSize) {
+	if payload.Method != zip.Store || payload.UncompressedSize64 != uint64(m.StoredSize) {
 		return verifiedPart{}, fmt.Errorf("payload 크기/압축 방식 불일치")
 	}
 	r, err := payload.Open()
@@ -168,7 +187,7 @@ func verifyPart(path string) (verifiedPart, error) {
 	if closeErr != nil {
 		return verifiedPart{}, closeErr
 	}
-	if n != m.PayloadSize || hex.EncodeToString(h.Sum(nil)) != m.ScrambledSHA256 {
+	if n != m.StoredSize || hex.EncodeToString(h.Sum(nil)) != m.ScrambledSHA256 {
 		return verifiedPart{}, fmt.Errorf("스크램블 payload SHA-256 불일치")
 	}
 	if _, err := decodeNonce(m.Nonce); err != nil {

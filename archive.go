@@ -18,7 +18,7 @@ func makeTar(source string) (*os.File, int64, string, error) {
 	if err != nil {
 		return nil, 0, "", err
 	}
-	tmp, err := os.CreateTemp("", "packer-source-*.tar")
+	tmp, err := os.CreateTemp("", "sugyeol-source-*.tar")
 	if err != nil {
 		return nil, 0, "", err
 	}

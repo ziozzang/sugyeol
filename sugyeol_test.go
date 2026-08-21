@@ -2,9 +2,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -84,14 +91,14 @@ func TestPackVerifyUnpackRoundTrip(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatal("restored data differs")
 	}
-	keyInfo, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".packer", "ed25519_private.pem"))
+	keyInfo, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".sugyeol", "ed25519_private.pem"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if keyInfo.Mode().Perm() != 0600 {
 		t.Fatalf("private key mode = %o", keyInfo.Mode().Perm())
 	}
-	identityInfo, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".packer", "identity.json"))
+	identityInfo, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".sugyeol", "identity.json"))
 	if err != nil || identityInfo.Mode().Perm() != 0600 {
 		t.Fatalf("identity mode: %v, %v", identityInfo, err)
 	}
@@ -106,7 +113,7 @@ func TestSigningRequiresInitializedIdentity(t *testing.T) {
 	if err := pack(input, filepath.Join(t.TempDir(), "bundle"), 32*1024, true); err == nil {
 		t.Fatal("pack signed without initialized identity")
 	}
-	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".packer", "ed25519_private.pem")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".sugyeol", "ed25519_private.pem")); !os.IsNotExist(err) {
 		t.Fatalf("private key was created before identity init: %v", err)
 	}
 }
@@ -171,6 +178,53 @@ func TestPackWithoutScrambling(t *testing.T) {
 	}
 }
 
+func TestEncryptedPackRoundTripAndWrongPassword(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Crypto Signer", "crypto@example.com")
+	input := filepath.Join(t.TempDir(), "encrypted.bin")
+	data := bytes.Repeat([]byte("high-speed authenticated encryption\x00"), 160000)
+	if err := os.WriteFile(input, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefix := filepath.Join(t.TempDir(), "encrypted")
+	password := []byte("correct horse battery staple")
+	const maxSize = int64(6 * 1024 * 1024)
+	if err := packWithPassword(input, prefix, maxSize, false, password); err != nil {
+		t.Fatal(err)
+	}
+	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	if len(parts) == 0 {
+		t.Fatal("no encrypted parts")
+	}
+	verified, err := verifyParts(parts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range verified {
+		if p.m.Encryption != encryptionName || p.m.KDF != kdfName || p.m.StoredSize != encryptedStoredSize(p.m.PayloadSize) {
+			t.Fatal("encrypted manifest fields are invalid")
+		}
+		st, err := os.Stat(p.path)
+		if err != nil || st.Size() > maxSize {
+			t.Fatalf("encrypted part size: %v, %v", st, err)
+		}
+	}
+	restore := t.TempDir()
+	if err := unpackWithPassword(parts, restore, append([]byte(nil), password...)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(restore, "encrypted.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("decrypted data differs")
+	}
+	if err := unpackWithPassword(parts, t.TempDir(), []byte("definitely wrong password")); err == nil {
+		t.Fatal("wrong password was accepted")
+	}
+}
+
 func TestDetachedDirectorySignature(t *testing.T) {
 	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
 	initTestIdentity(t, "Test Signer", "test@example.com")
@@ -231,7 +285,7 @@ func TestSignatureChainRequiresValidPriorChainAndSource(t *testing.T) {
 	if err := os.WriteFile(pub2Path, pub2, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := endorseCommand([]string{"-source", source, "-label", "reviewer", "-pubkey", pub1Path, meta}); err != nil {
+	if err := countersignCommand([]string{"-source", source, "-label", "reviewer", "-pubkey", pub1Path, meta}); err != nil {
 		t.Fatal(err)
 	}
 	if err := verifyDetached(meta, source, []string{pub1Path, pub2Path}, 2); err != nil {
@@ -244,7 +298,7 @@ func TestSignatureChainRequiresValidPriorChainAndSource(t *testing.T) {
 	if err := os.WriteFile(source, []byte("modified before endorsement"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := endorseCommand([]string{"-source", source, "-pubkey", pub1Path, meta}); err == nil {
+	if err := countersignCommand([]string{"-source", source, "-pubkey", pub1Path, meta}); err == nil {
 		t.Fatal("endorsement accepted changed source")
 	}
 	unchangedMeta, err := os.ReadFile(meta)
@@ -269,7 +323,7 @@ func TestSignatureChainRequiresValidPriorChainAndSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := endorseCommand([]string{"-source", source, "-pubkey", pub1Path, meta}); err == nil {
+	if err := countersignCommand([]string{"-source", source, "-pubkey", pub1Path, meta}); err == nil {
 		t.Fatal("endorsement accepted a broken prior chain")
 	}
 	after, err := os.ReadFile(meta)
@@ -299,7 +353,80 @@ func TestCompareVersionsAndAssetNames(t *testing.T) {
 		t.Fatal("version comparison")
 	}
 	name, err := releaseAssetName("1.0.0", "linux", "amd64")
-	if err != nil || name != "packer_1.0.0_linux_x86_64" {
+	if err != nil || name != "sugyeol_1.0.0_linux_x86_64" {
 		t.Fatalf("asset = %q, %v", name, err)
+	}
+}
+
+func TestContainerImageSignAndVerify(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Image Signer", "image@example.com")
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`)
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			fmt.Fprint(w, `{"token":"test-token"}`)
+		case "/v2/team/app/manifests/latest":
+			if r.Header.Get("Authorization") != "Bearer test-token" {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+server.URL+`/token",service="test",scope="repository:team/app:pull"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			d := sha256.Sum256(manifest)
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", "sha256:"+hex.EncodeToString(d[:]))
+			w.Write(manifest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	imageRef := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
+	meta := filepath.Join(t.TempDir(), "image.meta")
+	if err := imageSignCommand([]string{"-out", meta, "-label", "release", imageRef}); err != nil {
+		t.Fatal(err)
+	}
+	_, pub, _, err := loadSigningIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubPath := filepath.Join(t.TempDir(), "image-signer.pem")
+	if err := os.WriteFile(pubPath, pub, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := imageVerifyCommand([]string{"-pubkey", pubPath, meta}); err != nil {
+		t.Fatal(err)
+	}
+	manifest = append(manifest, '\n')
+	if err := imageVerifyCommand([]string{"-pubkey", pubPath, meta}); err == nil {
+		t.Fatal("changed remote manifest verified")
+	}
+}
+
+func TestParseImageReference(t *testing.T) {
+	ref, err := parseImageReference("ubuntu:24.04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Registry != "registry-1.docker.io" || ref.Repository != "library/ubuntu" || ref.Identifier != "24.04" {
+		t.Fatalf("unexpected ref: %+v", ref)
+	}
+	if _, err := parseImageReference("example.com/team/app@sha256:bad"); err == nil {
+		t.Fatal("invalid digest accepted")
+	}
+}
+
+func BenchmarkEncryptedPayload64MiB(b *testing.B) {
+	plain := bytes.Repeat([]byte{0x5a}, 64*1024*1024)
+	m := manifest{SetID: "00112233445566778899aabbccddeeff", Part: 1, TotalParts: 1, PayloadSize: int64(len(plain))}
+	master := bytes.Repeat([]byte{0x42}, 32)
+	nonce := "00112233445566778899aabb"
+	b.SetBytes(int64(len(plain)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := encryptPayload(io.Discard, bytes.NewReader(plain), m, master, nonce, sha256.New(), sha256.New()); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

@@ -20,12 +20,12 @@ type signingIdentity struct {
 	Fingerprint string    `json:"fingerprint"`
 }
 
-func packerHome() (string, error) {
+func sugyeolHome() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("홈 디렉터리 확인: %w", err)
 	}
-	return filepath.Join(home, ".packer"), nil
+	return filepath.Join(home, ".sugyeol"), nil
 }
 
 func loadOrCreateKey() (ed25519.PrivateKey, []byte, error) {
@@ -37,7 +37,7 @@ func loadExistingKey() (ed25519.PrivateKey, []byte, error) {
 }
 
 func loadKey(create bool) (ed25519.PrivateKey, []byte, error) {
-	dir, err := packerHome()
+	dir, err := sugyeolHome()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -111,7 +111,7 @@ func initializeIdentity(name, email string) (signingIdentity, error) {
 	if name == "" || email == "" || !strings.Contains(email, "@") {
 		return signingIdentity{}, fmt.Errorf("name and a valid email are required")
 	}
-	dir, err := packerHome()
+	dir, err := sugyeolHome()
 	if err != nil {
 		return signingIdentity{}, err
 	}
@@ -150,7 +150,7 @@ func initializeIdentity(name, email string) (signingIdentity, error) {
 }
 
 func loadSigningIdentity() (ed25519.PrivateKey, []byte, signingIdentity, error) {
-	dir, err := packerHome()
+	dir, err := sugyeolHome()
 	if err != nil {
 		return nil, nil, signingIdentity{}, err
 	}
@@ -162,7 +162,7 @@ func loadSigningIdentity() (ed25519.PrivateKey, []byte, signingIdentity, error) 
 	b, err := os.ReadFile(identityPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil, signingIdentity{}, fmt.Errorf("signing identity is not initialized; run: packer key init --name <name> --email <email>")
+			return nil, nil, signingIdentity{}, fmt.Errorf("signing identity is not initialized; run: sugyeol key init --name <name> --email <email>")
 		}
 		return nil, nil, signingIdentity{}, err
 	}

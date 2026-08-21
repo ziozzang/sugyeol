@@ -49,7 +49,7 @@ func fetchRelease(ctx context.Context, client *http.Client, repo, tag, token str
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "packer-selfupdate")
+	req.Header.Set("User-Agent", "sugyeol-selfupdate")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -78,7 +78,7 @@ func releaseAssetName(ver, goos, goarch string) (string, error) {
 	if platform == "" || arch == "" {
 		return "", fmt.Errorf("no release build for %s/%s", goos, goarch)
 	}
-	name := fmt.Sprintf("packer_%s_%s_%s", ver, platform, arch)
+	name := fmt.Sprintf("sugyeol_%s_%s_%s", ver, platform, arch)
 	if goos == "windows" {
 		name += ".exe"
 	}
@@ -142,7 +142,7 @@ func downloadBytes(ctx context.Context, client *http.Client, url string, limit i
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "packer-selfupdate")
+	req.Header.Set("User-Agent", "sugyeol-selfupdate")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -159,7 +159,7 @@ func downloadVerified(ctx context.Context, client *http.Client, a asset, want, d
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "packer-selfupdate")
+	req.Header.Set("User-Agent", "sugyeol-selfupdate")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -168,7 +168,7 @@ func downloadVerified(ctx context.Context, client *http.Client, a asset, want, d
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s: %s", a.Name, resp.Status)
 	}
-	tmp, err := os.CreateTemp(dir, ".packer-update-*")
+	tmp, err := os.CreateTemp(dir, ".sugyeol-update-*")
 	if err != nil {
 		return "", err
 	}

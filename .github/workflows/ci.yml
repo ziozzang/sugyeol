@@ -22,4 +22,4 @@ jobs:
       - name: Test
         run: go test -race -cover ./...
       - name: Static build
-        run: make build && file packer | grep 'statically linked'
+        run: make build && file sugyeol | grep 'statically linked'

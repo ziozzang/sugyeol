@@ -25,7 +25,7 @@ for target in "${targets[@]}"; do
   read -r goos goarch platform arch <<<"${target}"
   extension=""
   if [[ "${goos}" == "windows" ]]; then extension=".exe"; fi
-  filename="packer_${release_version}_${platform}_${arch}${extension}"
+  filename="sugyeol_${release_version}_${platform}_${arch}${extension}"
   output="${dist_dir}/${filename}"
   echo "building ${filename}"
   (

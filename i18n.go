@@ -12,24 +12,26 @@ var messages = map[string]map[string]string{
 	"en": {
 		"command_required": "a command is required",
 		"unknown_command":  "unknown command %q",
-		"pack_usage":       "usage: packer pack -size 10MiB -out backup <file|directory>",
+		"pack_usage":       "usage: sugyeol pack -size 10MiB -out backup <file|directory>",
 		"verify_files":     "specify .zip parts to verify",
 		"unpack_files":     "specify .zip parts to restore",
 		"size_help":        "maximum part size (unitless values are MB; e.g. 10, 10MiB, 1GB)",
 		"out_help":         "output filename prefix",
 		"scramble_help":    "enable reversible payload scrambling",
 		"restore_help":     "restore destination directory",
-		"usage": `packer - signed split ZIP creator/verifier/restorer
+		"usage": `sugyeol - signed split ZIP creator/verifier/restorer
 
-  packer [--lang en|ko] pack -size 10MiB -scramble=true -out backup <file|directory>
-  packer verify backup.part-*.zip
-  packer unpack -out <directory> backup.part-*.zip
-  packer sign -out source.meta <file|directory>
-  packer endorse -source <file|directory> source.meta
-  packer verify -source <file|directory> source.meta
-  packer key init --name <name> --email <email>
-  packer key [-out public_key.pem]
-  packer update [--check]`,
+  sugyeol [--lang en|ko] pack -size 10MiB [-scramble=true|-encrypt] -out backup <file|directory>
+  sugyeol verify backup.part-*.zip
+  sugyeol unpack -out <directory> backup.part-*.zip
+  sugyeol sign -out source.meta <file|directory>
+  sugyeol countersign -source <file|directory> -pubkey trusted.pem source.meta
+  sugyeol verify -source <file|directory> source.meta
+  sugyeol image sign <registry/repository:tag>
+  sugyeol image verify <image.meta>
+  sugyeol key init --name <name> --email <email>
+  sugyeol key [-out public_key.pem]
+  sugyeol update [--check]`,
 		"created":            "created %s (%d bytes)\n",
 		"verified":           "verified %s (part %d/%d)\n",
 		"restored":           "restored %s into %s\n",
@@ -39,7 +41,7 @@ var messages = map[string]map[string]string{
 		"update_newer":       "your version is newer than the published release (%s)\n",
 		"update_downloading": "downloading %s (%s)...\n",
 		"updated":            "updated %s: %s -> %s\n",
-		"update_notice":      "packer %s is available (you have %s). Run 'packer update' to upgrade.",
+		"update_notice":      "sugyeol %s is available (you have %s). Run 'sugyeol update' to upgrade.",
 		"signed":             "signed %s -> %s\n",
 		"public_key":         "public key: %s\n",
 		"fingerprint":        "fingerprint: %s\n",
@@ -52,24 +54,26 @@ var messages = map[string]map[string]string{
 	"ko": {
 		"command_required": "명령이 필요합니다",
 		"unknown_command":  "알 수 없는 명령 %q",
-		"pack_usage":       "사용법: packer pack -size 10MiB -out backup <파일|디렉터리>",
+		"pack_usage":       "사용법: sugyeol pack -size 10MiB -out backup <파일|디렉터리>",
 		"verify_files":     "검사할 .zip 파트를 지정하세요",
 		"unpack_files":     "복구할 .zip 파트를 지정하세요",
 		"size_help":        "파트의 최대 크기 (단위 생략 시 MB; 예: 10, 10MiB, 1GB)",
 		"out_help":         "출력 파일 접두사",
 		"scramble_help":    "가역 payload 스크램블링 사용",
 		"restore_help":     "복구 대상 디렉터리",
-		"usage": `packer - 서명된 분할 ZIP 생성/검사/복구
+		"usage": `sugyeol - 서명된 분할 ZIP 생성/검사/복구
 
-  packer [--lang en|ko] pack -size 10MiB -scramble=true -out backup <파일|디렉터리>
-  packer verify backup.part-*.zip
-  packer unpack -out <디렉터리> backup.part-*.zip
-  packer sign -out source.meta <파일|디렉터리>
-  packer endorse -source <파일|디렉터리> source.meta
-  packer verify -source <파일|디렉터리> source.meta
-  packer key init --name <이름> --email <이메일>
-  packer key [-out public_key.pem]
-  packer update [--check]`,
+  sugyeol [--lang en|ko] pack -size 10MiB [-scramble=true|-encrypt] -out backup <파일|디렉터리>
+  sugyeol verify backup.part-*.zip
+  sugyeol unpack -out <디렉터리> backup.part-*.zip
+  sugyeol sign -out source.meta <파일|디렉터리>
+  sugyeol countersign -source <파일|디렉터리> -pubkey trusted.pem source.meta
+  sugyeol verify -source <파일|디렉터리> source.meta
+  sugyeol image sign <registry/repository:tag>
+  sugyeol image verify <image.meta>
+  sugyeol key init --name <이름> --email <이메일>
+  sugyeol key [-out public_key.pem]
+  sugyeol update [--check]`,
 		"created":            "%s 생성 (%d 바이트)\n",
 		"verified":           "%s 검증 완료 (파트 %d/%d)\n",
 		"restored":           "%s을(를) %s에 복구했습니다\n",
@@ -79,7 +83,7 @@ var messages = map[string]map[string]string{
 		"update_newer":       "현재 버전이 공개 릴리스(%s)보다 새 버전입니다\n",
 		"update_downloading": "%s (%s) 다운로드 중...\n",
 		"updated":            "%s 업데이트 완료: %s -> %s\n",
-		"update_notice":      "packer %s 버전이 있습니다(현재 %s). 'packer update'로 업데이트하세요.",
+		"update_notice":      "sugyeol %s 버전이 있습니다(현재 %s). 'sugyeol update'로 업데이트하세요.",
 		"signed":             "%s 서명 완료 -> %s\n",
 		"public_key":         "공개키: %s\n",
 		"fingerprint":        "지문: %s\n",
@@ -92,7 +96,7 @@ var messages = map[string]map[string]string{
 }
 
 func detectLanguage() string {
-	for _, name := range []string{"PACKER_LANG", "LC_ALL", "LC_MESSAGES", "LANG"} {
+	for _, name := range []string{"SUGYEOL_LANG", "LC_ALL", "LC_MESSAGES", "LANG"} {
 		v := strings.ToLower(os.Getenv(name))
 		if strings.HasPrefix(v, "ko") {
 			return "ko"

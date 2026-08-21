@@ -9,15 +9,34 @@ import (
 )
 
 func unpack(paths []string, out string) error {
+	return unpackWithPassword(paths, out, nil)
+}
+
+func unpackWithPassword(paths []string, out string, password []byte) error {
 	parts, err := verifyParts(paths, false)
 	if err != nil {
 		return err
 	}
-	tarFile, err := os.CreateTemp("", "packer-restore-*.tar")
+	tarFile, err := os.CreateTemp("", "sugyeol-restore-*.tar")
 	if err != nil {
 		return err
 	}
 	defer func() { tarFile.Close(); os.Remove(tarFile.Name()) }()
+	var master []byte
+	if parts[0].m.Encryption == encryptionName {
+		if len(password) == 0 {
+			password, err = readEncryptionPassword("", false)
+			if err != nil {
+				return err
+			}
+			defer clearBytes(password)
+		}
+		master, err = deriveMasterKey(password, parts[0].m.KDFSalt, parts[0].m.KDFMemory, parts[0].m.KDFTime, parts[0].m.KDFParallelism)
+		if err != nil {
+			return err
+		}
+		defer clearBytes(master)
+	}
 	for _, p := range parts {
 		zr, payload, err := payloadReader(p.path)
 		if err != nil {
@@ -25,11 +44,17 @@ func unpack(paths []string, out string) error {
 		}
 		nonce, _ := decodeNonce(p.m.Nonce)
 		h := sha256.New()
-		var decoded io.Reader = payload
-		if p.m.Scramble == "xor-sha256-counter-v1" {
-			decoded = newXORReader(payload, p.m.SetID, p.m.Part, nonce)
+		var n int64
+		var copyErr error
+		if p.m.Encryption == encryptionName {
+			n, copyErr = decryptPayload(tarFile, payload, p.m, master, h)
+		} else {
+			var decoded io.Reader = payload
+			if p.m.Scramble == "xor-sha256-counter-v1" {
+				decoded = newXORReader(payload, p.m.SetID, p.m.Part, nonce)
+			}
+			n, copyErr = io.Copy(io.MultiWriter(tarFile, h), decoded)
 		}
-		n, copyErr := io.Copy(io.MultiWriter(tarFile, h), decoded)
 		closeErr := payload.Close()
 		zipCloseErr := zr.Close()
 		if copyErr != nil {

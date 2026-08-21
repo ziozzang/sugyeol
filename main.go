@@ -14,7 +14,7 @@ func main() {
 	startUpdateRefresh(os.Args[1:])
 	defer maybeNotifyUpdate(os.Args[1:])
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "packer:", err)
+		fmt.Fprintln(os.Stderr, "sugyeol:", err)
 		os.Exit(1)
 	}
 }
@@ -31,6 +31,8 @@ func run(args []string) error {
 		sizeText := fs.String("size", "100", tr("size_help"))
 		out := fs.String("out", "package", tr("out_help"))
 		scramble := fs.Bool("scramble", true, tr("scramble_help"))
+		encrypt := fs.Bool("encrypt", false, "encrypt payloads with a password (overrides scrambling)")
+		passwordFile := fs.String("password-file", "", "read encryption password from a 0600 file")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -40,6 +42,17 @@ func run(args []string) error {
 		sz, err := parseSize(*sizeText)
 		if err != nil {
 			return err
+		}
+		if *encrypt {
+			password, err := readEncryptionPassword(*passwordFile, true)
+			if err != nil {
+				return err
+			}
+			defer clearBytes(password)
+			return packWithPassword(fs.Arg(0), *out, sz, false, password)
+		}
+		if *passwordFile != "" {
+			return errors.New("-password-file requires -encrypt")
 		}
 		return pack(fs.Arg(0), *out, sz, *scramble)
 	case "verify":
@@ -72,10 +85,12 @@ func run(args []string) error {
 		return nil
 	case "sign":
 		return signCommand(args[1:])
-	case "endorse", "co-sign":
-		return endorseCommand(args[1:])
+	case "countersign", "endorse", "co-sign", "cosign":
+		return countersignCommand(args[1:])
 	case "key":
 		return keyCommand(args[1:])
+	case "image", "container":
+		return imageCommand(args[1:])
 	case "verify-signature", "verify-sig":
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		source := fs.String("source", "", "source file/directory")
@@ -92,15 +107,25 @@ func run(args []string) error {
 	case "unpack", "restore":
 		fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 		out := fs.String("out", ".", tr("restore_help"))
+		passwordFile := fs.String("password-file", "", "read decryption password from a 0600 file")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() == 0 {
 			return errors.New(tr("unpack_files"))
 		}
-		return unpack(fs.Args(), *out)
+		var password []byte
+		var err error
+		if *passwordFile != "" {
+			password, err = readEncryptionPassword(*passwordFile, false)
+			if err != nil {
+				return err
+			}
+			defer clearBytes(password)
+		}
+		return unpackWithPassword(fs.Args(), *out, password)
 	case "version", "--version", "-version":
-		fmt.Println("packer", version)
+		fmt.Println("sugyeol", version)
 		return nil
 	case "update", "self-update":
 		return updateCommand(args[1:])

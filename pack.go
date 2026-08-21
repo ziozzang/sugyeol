@@ -13,6 +13,10 @@ import (
 )
 
 func pack(source, outPrefix string, maxSize int64, scramble bool) error {
+	return packWithPassword(source, outPrefix, maxSize, scramble, nil)
+}
+
+func packWithPassword(source, outPrefix string, maxSize int64, scramble bool, password []byte) error {
 	if maxSize <= metadataReserve {
 		return fmt.Errorf("파트 크기는 최소 %d 바이트보다 커야 합니다", metadataReserve)
 	}
@@ -30,6 +34,23 @@ func pack(source, outPrefix string, maxSize int64, scramble bool) error {
 		return err
 	}
 	payloadCap := maxSize - metadataReserve
+	var master []byte
+	kdfSalt := ""
+	if len(password) > 0 {
+		kdfSalt, err = randomHex(16)
+		if err != nil {
+			return err
+		}
+		master, err = deriveMasterKey(password, kdfSalt, kdfMemory, kdfTime, kdfParallelism)
+		if err != nil {
+			return err
+		}
+		defer clearBytes(master)
+		payloadCap = encryptionPayloadCapacity(maxSize)
+	}
+	if payloadCap <= 0 {
+		return fmt.Errorf("part size is too small for metadata")
+	}
 	total := int((tarSize + payloadCap - 1) / payloadCap)
 	if total < 1 {
 		total = 1
@@ -52,14 +73,41 @@ func pack(source, outPrefix string, maxSize int64, scramble bool) error {
 		}
 		name := fmt.Sprintf("%s.part-%06d-of-%06d.zip", outPrefix, part, total)
 		scrambleMethod := "none"
-		if scramble {
+		if scramble && len(master) == 0 {
 			scrambleMethod = "xor-sha256-counter-v1"
+		}
+		encryption := "none"
+		if len(master) > 0 {
+			encryption = encryptionName
 		}
 		if err := writePart(name, tarFile, amount, manifest{
 			Format: formatName, Version: formatVersion, SetID: setID, SourceName: sourceName,
 			Part: part, TotalParts: total, MaxPartSize: maxSize, PayloadOffset: offset,
-			PayloadSize: amount, Scramble: scrambleMethod,
-		}, priv, pubPEM, identity); err != nil {
+			PayloadSize: amount, StoredSize: amount, Scramble: scrambleMethod, Encryption: encryption,
+			KDF: func() string {
+				if len(master) > 0 {
+					return kdfName
+				}
+				return ""
+			}(), KDFSalt: kdfSalt,
+			KDFMemory: func() uint32 {
+				if len(master) > 0 {
+					return kdfMemory
+				}
+				return 0
+			}(), KDFTime: func() uint32 {
+				if len(master) > 0 {
+					return kdfTime
+				}
+				return 0
+			}(),
+			KDFParallelism: func() uint8 {
+				if len(master) > 0 {
+					return kdfParallelism
+				}
+				return 0
+			}(),
+		}, priv, pubPEM, identity, master); err != nil {
 			return err
 		}
 		created = append(created, name)
@@ -76,7 +124,7 @@ func pack(source, outPrefix string, maxSize int64, scramble bool) error {
 	return nil
 }
 
-func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed25519.PrivateKey, pubPEM []byte, identity signingIdentity) error {
+func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed25519.PrivateKey, pubPEM []byte, identity signingIdentity, master []byte) error {
 	nonce, err := randomHex(16)
 	if err != nil {
 		return err
@@ -89,23 +137,37 @@ func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed2
 		return err
 	}
 	nonceBytes, _ := decodeNonce(nonce)
-	scrambled, err := os.CreateTemp("", "packer-payload-*.bin")
+	scrambled, err := os.CreateTemp("", "sugyeol-payload-*.bin")
 	if err != nil {
 		return err
 	}
 	defer func() { scrambled.Close(); os.Remove(scrambled.Name()) }()
 	originalHash, scrambledHash := sha256.New(), sha256.New()
-	raw := io.TeeReader(io.LimitReader(tarFile, amount), originalHash)
-	var payloadReader io.Reader = raw
-	if m.Scramble == "xor-sha256-counter-v1" {
-		payloadReader = newXORReader(raw, m.SetID, m.Part, nonceBytes)
+	var n int64
+	if m.Encryption == encryptionName {
+		m.EncryptionNonce, err = randomHex(12)
+		if err != nil {
+			return err
+		}
+		n, err = encryptPayload(scrambled, io.LimitReader(tarFile, amount), m, master, m.EncryptionNonce, originalHash, scrambledHash)
+		m.StoredSize = n
+	} else {
+		raw := io.TeeReader(io.LimitReader(tarFile, amount), originalHash)
+		var payloadReader io.Reader = raw
+		if m.Scramble == "xor-sha256-counter-v1" {
+			payloadReader = newXORReader(raw, m.SetID, m.Part, nonceBytes)
+		}
+		n, err = io.Copy(io.MultiWriter(scrambled, scrambledHash), payloadReader)
 	}
-	n, err := io.Copy(io.MultiWriter(scrambled, scrambledHash), payloadReader)
 	if err != nil {
 		return err
 	}
-	if n != amount {
-		return fmt.Errorf("원본 TAR가 예상보다 짧습니다: %d != %d", n, amount)
+	expectedStored := amount
+	if m.Encryption == encryptionName {
+		expectedStored = encryptedStoredSize(amount)
+	}
+	if n != expectedStored {
+		return fmt.Errorf("stored payload size mismatch: %d != %d", n, expectedStored)
 	}
 	m.PayloadSHA256 = hex.EncodeToString(originalHash.Sum(nil))
 	m.ScrambledSHA256 = hex.EncodeToString(scrambledHash.Sum(nil))

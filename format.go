@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	formatName            = "packer-split-zip"
+	formatName            = "sugyeol-split-zip"
 	formatVersion         = 1
 	metadataReserve int64 = 16 * 1024
 )
@@ -27,10 +27,18 @@ type manifest struct {
 	MaxPartSize     int64  `json:"max_part_size"`
 	PayloadOffset   int64  `json:"payload_offset"`
 	PayloadSize     int64  `json:"payload_size"`
+	StoredSize      int64  `json:"stored_size"`
 	PayloadSHA256   string `json:"payload_sha256"`
 	ScrambledSHA256 string `json:"scrambled_sha256"`
 	Nonce           string `json:"nonce"`
 	Scramble        string `json:"scramble"`
+	Encryption      string `json:"encryption"`
+	KDF             string `json:"kdf,omitempty"`
+	KDFSalt         string `json:"kdf_salt,omitempty"`
+	KDFMemory       uint32 `json:"kdf_memory_kib,omitempty"`
+	KDFTime         uint32 `json:"kdf_time,omitempty"`
+	KDFParallelism  uint8  `json:"kdf_parallelism,omitempty"`
+	EncryptionNonce string `json:"encryption_nonce,omitempty"`
 	SignerName      string `json:"signer_name"`
 	SignerEmail     string `json:"signer_email"`
 	SignedAt        string `json:"signed_at"`
@@ -55,7 +63,7 @@ type xorReader struct {
 
 func newXORReader(r io.Reader, setID string, part int, nonce []byte) *xorReader {
 	h := sha256.New()
-	h.Write([]byte("packer-scramble-v1\x00"))
+	h.Write([]byte("sugyeol-scramble-v1\x00"))
 	h.Write([]byte(setID))
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(part))

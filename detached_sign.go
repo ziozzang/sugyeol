@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const detachedFormat = "packer-detached-signature"
+const detachedFormat = "sugyeol-detached-signature"
 
 type signedEntry struct {
 	Path   string `json:"path"`
@@ -66,7 +66,7 @@ func signCommand(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: packer sign [-out file.meta] <file|directory>")
+		return fmt.Errorf("usage: sugyeol sign [-out file.meta] <file|directory>")
 	}
 	source := fs.Arg(0)
 	if *out == "" {
@@ -163,8 +163,8 @@ func keyCommand(args []string) error {
 	return nil
 }
 
-func endorseCommand(args []string) error {
-	fs := flag.NewFlagSet("endorse", flag.ContinueOnError)
+func countersignCommand(args []string) error {
+	fs := flag.NewFlagSet("countersign", flag.ContinueOnError)
 	source := fs.String("source", "", "source file/directory (default: root_name in metadata)")
 	out := fs.String("out", "", "output metadata (default: replace the input metadata atomically)")
 	label := fs.String("label", "", "optional signed role/purpose label")
@@ -175,7 +175,7 @@ func endorseCommand(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: packer endorse [-source path] [-out copy.meta] <source.meta>")
+		return fmt.Errorf("usage: sugyeol countersign [-source path] [-out copy.meta] -pubkey trusted.pem <source.meta>")
 	}
 	input := fs.Arg(0)
 	bundle, manifestBytes, err := loadSignatureBundle(input)
@@ -187,7 +187,7 @@ func endorseCommand(args []string) error {
 		return err
 	}
 	if len(trustedKeys) == 0 {
-		return fmt.Errorf("endorsement requires at least one trusted existing signer via -pubkey")
+		return fmt.Errorf("countersigning requires at least one trusted existing signer via -pubkey")
 	}
 	if err := checkSignaturePolicy(pubs, trustedKeys, *minPrior); err != nil {
 		return err
@@ -221,7 +221,7 @@ func endorseCommand(args []string) error {
 		return err
 	}
 	pub := priv.Public().(ed25519.PublicKey)
-	fmt.Printf("endorsement %d added: %s\n", len(bundle.Records), destination)
+	fmt.Printf("countersignature %d added: %s\n", len(bundle.Records), destination)
 	fmt.Printf(tr("public_key"), hex.EncodeToString(pub))
 	fmt.Printf(tr("fingerprint"), publicFingerprint(pub))
 	return nil
@@ -257,7 +257,7 @@ func writeSignatureBundle(path string, bundle signatureBundle) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".packer-meta-*")
+	tmp, err := os.CreateTemp(dir, ".sugyeol-meta-*")
 	if err != nil {
 		return err
 	}
@@ -300,7 +300,7 @@ func buildSignedManifest(source string) ([]byte, signedManifest, error) {
 	if !rootInfo.IsDir() && !rootInfo.Mode().IsRegular() {
 		return nil, signedManifest{}, fmt.Errorf("only regular files and directories can be signed")
 	}
-	m := signedManifest{Format: "packer-sha256-manifest", Version: 1, RootName: rootInfo.Name()}
+	m := signedManifest{Format: "sugyeol-sha256-manifest", Version: 1, RootName: rootInfo.Name()}
 	parent := filepath.Dir(abs)
 	err = filepath.Walk(abs, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -426,7 +426,7 @@ func makeChainRecord(manifest []byte, previous *signatureRecord, index int, iden
 }
 
 func chainPreimage(rec signatureRecord) []byte {
-	return []byte("packer-signature-chain-v1\nindex: " + strconv.Itoa(rec.Index) + "\nalgorithm: " + rec.Algorithm + "\nsigner_name: " + strconv.Quote(rec.SignerName) + "\nsigner_email: " + strconv.Quote(rec.SignerEmail) + "\nsigner_label: " + strconv.Quote(rec.SignerLabel) + "\nsigned_at: " + rec.SignedAt.UTC().Format(time.RFC3339Nano) + "\nsalt: " + rec.Salt + "\npublic_key: " + rec.PublicKey + "\nmanifest_sha256: " + rec.ManifestSHA256 + "\nprevious_record_sha256: " + rec.PreviousRecordSHA256 + "\n")
+	return []byte("sugyeol-signature-chain-v1\nindex: " + strconv.Itoa(rec.Index) + "\nalgorithm: " + rec.Algorithm + "\nsigner_name: " + strconv.Quote(rec.SignerName) + "\nsigner_email: " + strconv.Quote(rec.SignerEmail) + "\nsigner_label: " + strconv.Quote(rec.SignerLabel) + "\nsigned_at: " + rec.SignedAt.UTC().Format(time.RFC3339Nano) + "\nsalt: " + rec.Salt + "\npublic_key: " + rec.PublicKey + "\nmanifest_sha256: " + rec.ManifestSHA256 + "\nprevious_record_sha256: " + rec.PreviousRecordSHA256 + "\n")
 }
 
 func recordDigest(rec signatureRecord) string {

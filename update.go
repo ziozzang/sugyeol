@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const updateRepo = "ziozzang/pakcer"
+const updateRepo = "ziozzang/sugyeol"
 const updateCheckInterval = 24 * time.Hour
 
 func updateCommand(args []string) error {
@@ -90,7 +90,7 @@ type updateCache struct {
 }
 
 func updateEligible(args []string) bool {
-	if os.Getenv("PACKER_NO_UPDATE_CHECK") != "" {
+	if os.Getenv("SUGYEOL_NO_UPDATE_CHECK") != "" {
 		return false
 	}
 	if len(args) == 0 {
@@ -138,7 +138,7 @@ func updateCachePath() string {
 	if err != nil {
 		dir = os.TempDir()
 	}
-	return filepath.Join(dir, "packer", "update-check.json")
+	return filepath.Join(dir, "sugyeol", "update-check.json")
 }
 func readUpdateCache(path string) updateCache {
 	var c updateCache
