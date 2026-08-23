@@ -24,7 +24,7 @@ registry image ─────── native pull ──> OCI tar/tgz ──> sig
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.4.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+Current release: **v1.4.1**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## Build and install
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.4.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.4.1` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
 ## Progress, verbose output, debug output, and cancellation
 
@@ -52,8 +52,8 @@ sugyeol --debug image verify app.oci.tgz app.image.meta
 sugyeol --progress always pack -o backup ./source
 
 # Disable progress UI completely.
-sugyeol --progress never verify backup.part-*.zip
-sugyeol --no-progress verify backup.part-*.zip
+sugyeol --progress never verify backup_part-*.zip
+sugyeol --no-progress verify backup_part-*.zip
 ```
 
 `--verbose/-v` adds per-file, per-part, and per-container-blob status. `--debug` implies verbose and adds timestamped operational diagnostics, but never prints passwords, private keys, bearer tokens, credential values, or Authorization headers. Progress is available for TAR creation, hashing/signing, encryption/scrambling, compression/ZIP writing, verification, restoration/extraction, OCI/docker archive inspection, registry downloads, and self-update downloads.
@@ -105,6 +105,8 @@ Pack options:
 | `--password` | `-P` | none | Password text. Convenient for shell automation but exposed to process listings/history/logs. |
 | `--password-file` | `-p` | none | Read the password from a regular file whose permissions are `0600` or stricter. Requires encryption. |
 
+`--out foo` creates `foo_part-000001-of-00000N.zip`, etc. Large TAR and payload intermediates are created under `./tmp` on the current working filesystem instead of the system `/tmp`; Sugyeol removes each intermediate and removes `./tmp` when it is empty, including error and cancellation paths. Existing or concurrent contents under `./tmp` are never deleted.
+
 Compression mapping:
 
 | Value | ZIP method |
@@ -129,16 +131,16 @@ Every part is a normal `.zip` containing exactly:
 ```sh
 # Interactive input is hidden and never placed in process arguments.
 sugyeol pack -e -s 1900 -o secret ./source
-sugyeol unpack -o ./restored secret.part-*.zip
+sugyeol unpack -o ./restored secret_part-*.zip
 
 # Automation
 chmod 600 ./password.txt
 sugyeol pack -e -p ./password.txt -o secret ./source
-sugyeol unpack -p ./password.txt -o ./restored secret.part-*.zip
+sugyeol unpack -p ./password.txt -o ./restored secret_part-*.zip
 
 # Literal shell option: supported, but visible to ps/history/logging.
 sugyeol pack -e -P "automation-secret" -o secret ./source
-sugyeol unpack -P "automation-secret" -o ./restored secret.part-*.zip
+sugyeol unpack -P "automation-secret" -o ./restored secret_part-*.zip
 ```
 
 Encryption uses 4 MiB streaming AES-256-GCM chunks. Argon2id derives one package master key using a random 128-bit salt, 19 MiB memory, two passes, and one lane; HMAC-SHA-256 derives separate per-part AES keys. Each chunk has an authentication tag. Password hashes are not stored. Password precedence is literal `-P/--password`, protected `-p/--password-file`, then hidden terminal input; literal and file options are mutually exclusive. `pack -e` asks for a hidden password and confirmation when neither option is supplied. During unpack, Sugyeol first verifies the manifests and automatically asks only when it detects encryption and no password was supplied. Prefer the protected file for automation because literal command arguments may be exposed by `ps`, shell history, CI logs, or error reporting. An incorrect password, modified ciphertext, changed manifest, or mixed/missing part is rejected before successful restoration.
@@ -146,13 +148,13 @@ Encryption uses 4 MiB streaming AES-256-GCM chunks. Argon2id derives one package
 ## Verify and restore packages
 
 ```sh
-sugyeol verify backup.part-*.zip
-sugyeol unpack --out ./restored backup.part-*.zip
-sugyeol unpack -o ./restored backup.part-*.zip
+sugyeol verify backup_part-*.zip
+sugyeol unpack --out ./restored backup_part-*.zip
+sugyeol unpack -o ./restored backup_part-*.zip
 
 # Pin the expected archive signer.
-sugyeol verify --pubkey jane-public.pem backup.part-*.zip
-sugyeol verify -k jane-public.pem backup.part-*.zip
+sugyeol verify --pubkey jane-public.pem backup_part-*.zip
+sugyeol verify -k jane-public.pem backup_part-*.zip
 ```
 
 Verification checks ZIP structure, canonical manifest encoding, Ed25519 signature, public-key consistency, SHA-256 payload hashes, part count/order/offsets, encryption/compression parameters, and the declared maximum size. Restoration repeats verification and then safely extracts the TAR while rejecting traversal paths, links, and unsupported entries.
@@ -251,7 +253,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.4.0  # short: -v v1.4.0
+sugyeol update --version v1.4.1  # short: -v v1.4.1
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -263,12 +265,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.4.0
+make release VERSION=1.4.1
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.4.0 \
-  dist/sugyeol_1.4.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.0"
+gh release create v1.4.1 \
+  dist/sugyeol_1.4.1_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.1"
 ```
 
 ## Security boundaries

@@ -61,7 +61,7 @@ func TestProgressVerboseDebugAndCancellation(t *testing.T) {
 	if _, err := parseGlobalUIArgs([]string{"--progress=invalid", "version"}); err == nil {
 		t.Fatal("invalid progress mode was accepted")
 	}
-	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.4.0"}); got != "update" {
+	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.4.1"}); got != "update" {
 		t.Fatalf("effective command = %q", got)
 	}
 }
@@ -74,6 +74,65 @@ func TestParseSizeDefaultIsMB(t *testing.T) {
 	got, err = parseSize("10MiB")
 	if err != nil || got != 10<<20 {
 		t.Fatalf("parseSize(10MiB) = %d, %v", got, err)
+	}
+}
+
+func TestWorkingTempUsesCurrentDirectoryAndCleansUp(t *testing.T) {
+	work := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+
+	file, err := createWorkingTemp("sugyeol-test-*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir := filepath.Join(work, "tmp")
+	if filepath.Dir(filepath.Dir(file.Name())) != wantDir {
+		t.Fatalf("working temp = %s, want root %s", file.Name(), wantDir)
+	}
+	cleanupWorkingTemp(file)
+	if _, err := os.Stat(wantDir); !os.IsNotExist(err) {
+		t.Fatalf("working tmp directory was not removed: %v", err)
+	}
+}
+
+func TestMakeTarOfCurrentDirectoryExcludesItsWorkingFile(t *testing.T) {
+	work := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+	if err := os.WriteFile("source.txt", []byte("source"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	tarFile, _, _, err := makeTar(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupWorkingTemp(tarFile)
+	reader := tar.NewReader(tarFile)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(header.Name, "sugyeol-work-") || strings.Contains(header.Name, "sugyeol-source-") {
+			t.Fatalf("working directory was included in its TAR: %s", header.Name)
+		}
 	}
 }
 
@@ -104,8 +163,7 @@ func TestTarPreservesFilesystemMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		tarFile.Close()
-		os.Remove(tarFile.Name())
+		cleanupWorkingTemp(tarFile)
 	}()
 	header, err := tar.NewReader(tarFile).Next()
 	if err != nil {
@@ -183,13 +241,16 @@ func TestPackVerifyUnpackRoundTrip(t *testing.T) {
 	if err := pack(input, prefix, max, true); err != nil {
 		t.Fatal(err)
 	}
-	parts, err := filepath.Glob(prefix + ".part-*.zip")
+	parts, err := filepath.Glob(prefix + "_part-*.zip")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sort.Strings(parts)
 	if len(parts) < 2 {
 		t.Fatalf("expected multiple parts, got %d", len(parts))
+	}
+	if !strings.HasPrefix(filepath.Base(parts[0]), "bundle_part-") {
+		t.Fatalf("unexpected part name: %s", parts[0])
 	}
 	for _, part := range parts {
 		st, err := os.Stat(part)
@@ -316,7 +377,7 @@ func TestVerifyRejectsMutation(t *testing.T) {
 	if err := pack(input, prefix, 32*1024, true); err != nil {
 		t.Fatal(err)
 	}
-	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	parts, _ := filepath.Glob(prefix + "_part-*.zip")
 	b, err := os.ReadFile(parts[0])
 	if err != nil {
 		t.Fatal(err)
@@ -342,7 +403,7 @@ func TestPackWithoutScrambling(t *testing.T) {
 	if err := pack(input, prefix, 32*1024, false); err != nil {
 		t.Fatal(err)
 	}
-	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	parts, _ := filepath.Glob(prefix + "_part-*.zip")
 	verified, err := verifyParts(parts, false)
 	if err != nil {
 		t.Fatal(err)
@@ -378,7 +439,7 @@ func TestPackCompressionAndShortFlags(t *testing.T) {
 	if err := run([]string{"pack", "-s", "256KiB", "-o", prefix, "-x=false", "-c", "highest", input}); err != nil {
 		t.Fatal(err)
 	}
-	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	parts, _ := filepath.Glob(prefix + "_part-*.zip")
 	if len(parts) == 0 {
 		t.Fatal("no compressed parts")
 	}
@@ -419,7 +480,7 @@ func TestPackCompressionAndShortFlags(t *testing.T) {
 	if err := packWithOptions(randomInput, randomPrefix, maxSize, false, nil, highest); err != nil {
 		t.Fatal(err)
 	}
-	randomParts, _ := filepath.Glob(randomPrefix + ".part-*.zip")
+	randomParts, _ := filepath.Glob(randomPrefix + "_part-*.zip")
 	if _, err := verifyParts(randomParts, false); err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +514,7 @@ func TestEncryptedPackRoundTripAndWrongPassword(t *testing.T) {
 	if err := packWithPassword(input, prefix, maxSize, false, password); err != nil {
 		t.Fatal(err)
 	}
-	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	parts, _ := filepath.Glob(prefix + "_part-*.zip")
 	if len(parts) == 0 {
 		t.Fatal("no encrypted parts")
 	}
@@ -488,7 +549,7 @@ func TestEncryptedPackRoundTripAndWrongPassword(t *testing.T) {
 	if err := run([]string{"pack", "-e", "-P", "literal-password-value", "-s", "6MiB", "-o", literalPrefix, input}); err != nil {
 		t.Fatal(err)
 	}
-	literalParts, _ := filepath.Glob(literalPrefix + ".part-*.zip")
+	literalParts, _ := filepath.Glob(literalPrefix + "_part-*.zip")
 	literalRestore := t.TempDir()
 	literalArgs := []string{"unpack", "-P", "literal-password-value", "-o", literalRestore}
 	literalArgs = append(literalArgs, literalParts...)
@@ -516,7 +577,7 @@ func TestPackByExactPartCount(t *testing.T) {
 	if err := run([]string{"pack", "-n", "7", "-o", prefix, "-x=false", "-c", "highest", input}); err != nil {
 		t.Fatal(err)
 	}
-	parts, _ := filepath.Glob(prefix + ".part-*.zip")
+	parts, _ := filepath.Glob(prefix + "_part-*.zip")
 	if len(parts) != 7 {
 		t.Fatalf("parts = %d, want 7", len(parts))
 	}

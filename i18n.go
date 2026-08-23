@@ -26,8 +26,8 @@ var messages = map[string]map[string]string{
   Global UI: sugyeol [--lang en|ko] [--verbose|-v] [--debug] [--progress auto|always|never] <command>
 
   sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <file|directory>
-  sugyeol verify backup.part-*.zip
-  sugyeol unpack -out <directory> backup.part-*.zip
+  sugyeol verify backup_part-*.zip
+  sugyeol unpack -out <directory> backup_part-*.zip
   sugyeol sign -out source.meta <file|directory>
   sugyeol countersign -source <file|directory> -pubkey trusted.pem source.meta
   sugyeol verify -source <file|directory> source.meta
@@ -121,8 +121,8 @@ var messages = map[string]map[string]string{
   전역 UI: sugyeol [--lang en|ko] [--verbose|-v] [--debug] [--progress auto|always|never] <명령>
 
   sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <파일|디렉터리>
-  sugyeol verify backup.part-*.zip
-  sugyeol unpack -out <디렉터리> backup.part-*.zip
+  sugyeol verify backup_part-*.zip
+  sugyeol unpack -out <디렉터리> backup_part-*.zip
   sugyeol sign -out source.meta <파일|디렉터리>
   sugyeol countersign -source <파일|디렉터리> -pubkey trusted.pem source.meta
   sugyeol verify -source <파일|디렉터리> source.meta
