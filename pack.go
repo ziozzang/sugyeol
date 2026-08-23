@@ -33,7 +33,7 @@ func packWithOptionsAndParts(source, outPrefix string, maxSize int64, scramble b
 	if err != nil {
 		return err
 	}
-	defer func() { tarFile.Close(); os.Remove(tarFile.Name()) }()
+	defer cleanupWorkingTemp(tarFile)
 	priv, pubPEM, identity, err := loadSigningIdentity()
 	if err != nil {
 		return err
@@ -102,7 +102,7 @@ func packWithOptionsAndParts(source, outPrefix string, maxSize int64, scramble b
 		} else if remaining < amount {
 			amount = remaining
 		}
-		name := fmt.Sprintf("%s.part-%06d-of-%06d.zip", outPrefix, part, total)
+		name := fmt.Sprintf("%s_part-%06d-of-%06d.zip", outPrefix, part, total)
 		scrambleMethod := "none"
 		if scramble && len(master) == 0 {
 			scrambleMethod = "xor-sha256-counter-v1"
@@ -174,11 +174,11 @@ func writePart(path string, tarFile *os.File, amount int64, m manifest, priv ed2
 		return err
 	}
 	nonceBytes, _ := decodeNonce(nonce)
-	scrambled, err := os.CreateTemp("", "sugyeol-payload-*.bin")
+	scrambled, err := createWorkingTemp("sugyeol-payload-*.bin")
 	if err != nil {
 		return err
 	}
-	defer func() { scrambled.Close(); os.Remove(scrambled.Name()) }()
+	defer cleanupWorkingTemp(scrambled)
 	originalHash, scrambledHash := sha256.New(), sha256.New()
 	var n int64
 	if m.Encryption == encryptionName {

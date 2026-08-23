@@ -24,7 +24,7 @@
 
 ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
-현재 릴리스는 **v1.4.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
+현재 릴리스는 **v1.4.1**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## 빌드와 설치
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.4.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+`make release VERSION=1.4.1`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
 
 ## 진행률·상세 출력·디버그·취소
 
@@ -52,8 +52,8 @@ sugyeol --debug image verify app.oci.tgz app.image.meta
 sugyeol --progress always pack -o backup ./source
 
 # 진행 UI를 완전히 끕니다.
-sugyeol --progress never verify backup.part-*.zip
-sugyeol --no-progress verify backup.part-*.zip
+sugyeol --progress never verify backup_part-*.zip
+sugyeol --no-progress verify backup_part-*.zip
 ```
 
 `--verbose/-v`는 파일·파트·컨테이너 blob별 상태를 추가합니다. `--debug`는 verbose를 포함하고 시각이 붙은 동작 진단을 보여주지만 비밀번호, 개인키, bearer token, credential 값과 Authorization header는 출력하지 않습니다. TAR 생성, 해시/서명, 암호화/스크램블링, 압축/ZIP 기록, 검증, 복구/추출, OCI/docker 아카이브 검사, registry 다운로드와 자체 업데이트 다운로드에 진행률을 제공합니다.
@@ -104,6 +104,8 @@ Pack 옵션:
 | `--password` | `-P` | 없음 | 암호 문자열. 셸 자동화에는 편하지만 프로세스 목록/history/log에 노출될 수 있습니다. |
 | `--password-file` | `-p` | 없음 | `0600` 이하 권한의 일반 파일에서 암호를 읽습니다. 암호화 시에만 사용합니다. |
 
+`--out foo`를 지정하면 `foo_part-000001-of-00000N.zip` 형식으로 생성됩니다. 대용량 TAR·payload 임시 파일은 시스템 `/tmp`가 아니라 실행한 현재 파일시스템의 `./tmp` 아래에 만들며, 정상 종료뿐 아니라 오류·취소 시에도 개별 임시 파일을 지우고 비어 있는 `./tmp`를 제거합니다. 기존 파일이나 동시에 실행 중인 작업이 `./tmp`에 있으면 삭제하지 않습니다.
+
 압축 값:
 
 | 값 | ZIP 방식 |
@@ -128,16 +130,16 @@ Pack 옵션:
 ```sh
 # 터미널 입력은 숨겨지며 프로세스 인자에 암호가 노출되지 않습니다.
 sugyeol pack -e -s 1900 -o secret ./source
-sugyeol unpack -o ./restored secret.part-*.zip
+sugyeol unpack -o ./restored secret_part-*.zip
 
 # 자동화
 chmod 600 ./password.txt
 sugyeol pack -e -p ./password.txt -o secret ./source
-sugyeol unpack -p ./password.txt -o ./restored secret.part-*.zip
+sugyeol unpack -p ./password.txt -o ./restored secret_part-*.zip
 
 # 문자열 옵션도 지원하지만 ps/history/log에서 보일 수 있습니다.
 sugyeol pack -e -P "automation-secret" -o secret ./source
-sugyeol unpack -P "automation-secret" -o ./restored secret.part-*.zip
+sugyeol unpack -P "automation-secret" -o ./restored secret_part-*.zip
 ```
 
 4 MiB 단위 AES-256-GCM 스트리밍을 사용합니다. Argon2id가 임의 128-bit salt, 19 MiB 메모리, 2회, 1 lane으로 패키지 master key를 한 번 유도하고 HMAC-SHA-256이 파트별 AES 키를 만듭니다. 모든 chunk에 인증 tag가 있으며 암호 SHA는 저장하지 않습니다. 암호 우선순위는 문자열 `-P/--password`, 보호된 `-p/--password-file`, 숨김 터미널 입력이며 문자열과 파일 옵션은 함께 쓸 수 없습니다. `pack -e`는 두 옵션이 없으면 숨김 암호와 확인 암호를 묻습니다. Unpack은 manifest를 먼저 검사해 암호화를 감지하고 전달된 암호가 없을 때만 자동으로 숨김 입력을 띄웁니다. 문자열 인자는 `ps`, shell history, CI log, 오류 출력에 노출될 수 있으므로 자동화에는 보호된 파일 방식을 권장합니다. 틀린 암호, 변조된 ciphertext/manifest, 섞이거나 누락된 파트는 복구 성공 전에 거부됩니다.
@@ -145,13 +147,13 @@ sugyeol unpack -P "automation-secret" -o ./restored secret.part-*.zip
 ## 패키지 검사와 복구
 
 ```sh
-sugyeol verify backup.part-*.zip
-sugyeol unpack --out ./restored backup.part-*.zip
-sugyeol unpack -o ./restored backup.part-*.zip
+sugyeol verify backup_part-*.zip
+sugyeol unpack --out ./restored backup_part-*.zip
+sugyeol unpack -o ./restored backup_part-*.zip
 
 # 기대한 서명 공개키 고정
-sugyeol verify --pubkey hong-public.pem backup.part-*.zip
-sugyeol verify -k hong-public.pem backup.part-*.zip
+sugyeol verify --pubkey hong-public.pem backup_part-*.zip
+sugyeol verify -k hong-public.pem backup_part-*.zip
 ```
 
 검사는 ZIP 구조, canonical manifest, Ed25519 서명, 파트 공개키 일치, SHA-256, 파트 개수·순서·offset, 압축·암호화 매개변수, 최대 파일 크기를 확인합니다. 복구는 이를 다시 확인한 뒤 TAR 경로 탈출, 링크, 지원하지 않는 항목을 거부하면서 안전하게 풉니다.
@@ -250,7 +252,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check          # 단축: -c
 sugyeol update --force          # 단축: -f
-sugyeol update --version v1.4.0 # 단축: -v v1.4.0
+sugyeol update --version v1.4.1 # 단축: -v v1.4.1
 ```
 
 현재 플랫폼용 GitHub Release 자산을 받고 `SHA256SUMS`를 확인한 뒤 실행 파일을 원자 교체합니다. 대화형 실행은 최대 24시간에 한 번 실패 허용 방식으로 새 버전 알림만 확인하며 실제 교체에는 항상 `sugyeol update`가 필요합니다. `SUGYEOL_NO_UPDATE_CHECK=1`로 알림 확인을 끌 수 있습니다.
@@ -262,12 +264,12 @@ GitHub Actions는 의도적으로 비활성화했습니다. 직접 빌드·테�
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.4.0
+make release VERSION=1.4.1
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.4.0 \
-  dist/sugyeol_1.4.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.0"
+gh release create v1.4.1 \
+  dist/sugyeol_1.4.1_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.1"
 ```
 
 ## 보안 경계

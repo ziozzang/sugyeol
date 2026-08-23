@@ -18,20 +18,20 @@ func makeTar(source string) (*os.File, int64, string, error) {
 	if err != nil {
 		return nil, 0, "", err
 	}
-	tmp, err := os.CreateTemp("", "sugyeol-source-*.tar")
+	tmp, err := createWorkingTemp("sugyeol-source-*.tar")
 	if err != nil {
 		return nil, 0, "", err
 	}
 	ok := false
 	defer func() {
 		if !ok {
-			tmp.Close()
-			os.Remove(tmp.Name())
+			cleanupWorkingTemp(tmp)
 		}
 	}()
 	tw := tar.NewWriter(tmp)
 	rootParent := filepath.Dir(abs)
-	total, err := regularFileBytes(abs)
+	workDir := filepath.Dir(tmp.Name())
+	total, err := regularFileBytes(abs, workDir)
 	if err != nil {
 		return nil, 0, "", err
 	}
@@ -42,6 +42,9 @@ func makeTar(source string) (*os.File, int64, string, error) {
 		}
 		if walkErr != nil {
 			return walkErr
+		}
+		if filepath.Clean(path) == filepath.Clean(workDir) {
+			return filepath.SkipDir
 		}
 		if !fi.IsDir() && !fi.Mode().IsRegular() {
 			return fmt.Errorf("지원하지 않는 입력 항목(일반 파일/디렉터리만 허용): %s", path)
@@ -97,7 +100,11 @@ func makeTar(source string) (*os.File, int64, string, error) {
 	return tmp, sz, info.Name(), nil
 }
 
-func regularFileBytes(root string) (int64, error) {
+func regularFileBytes(root string, excludedPaths ...string) (int64, error) {
+	excludedPath := ""
+	if len(excludedPaths) > 0 {
+		excludedPath = filepath.Clean(excludedPaths[0])
+	}
 	var total int64
 	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -105,6 +112,12 @@ func regularFileBytes(root string) (int64, error) {
 		}
 		if err := checkCanceled(); err != nil {
 			return err
+		}
+		if excludedPath != "" && filepath.Clean(path) == excludedPath {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if info.Mode().IsRegular() {
 			if info.Size() > 0 && total > (1<<63-1)-info.Size() {

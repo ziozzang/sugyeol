@@ -7,5 +7,6 @@
 /*.tar
 /*.tgz
 /*.tar.gz
-/*.part-*-of-*.zip
+/*_part-*-of-*.zip
+/tmp/
 /.sugyeol-*-restore-*/

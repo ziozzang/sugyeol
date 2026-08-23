@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 )
 
 func unpack(paths []string, out string) error {
@@ -17,11 +16,11 @@ func unpackWithPassword(paths []string, out string, password []byte) (resultErr 
 	if err != nil {
 		return err
 	}
-	tarFile, err := os.CreateTemp("", "sugyeol-restore-*.tar")
+	tarFile, err := createWorkingTemp("sugyeol-restore-*.tar")
 	if err != nil {
 		return err
 	}
-	defer func() { tarFile.Close(); os.Remove(tarFile.Name()) }()
+	defer cleanupWorkingTemp(tarFile)
 	var master []byte
 	if parts[0].m.Encryption == encryptionName {
 		if len(password) == 0 {
