@@ -61,7 +61,7 @@ func TestProgressVerboseDebugAndCancellation(t *testing.T) {
 	if _, err := parseGlobalUIArgs([]string{"--progress=invalid", "version"}); err == nil {
 		t.Fatal("invalid progress mode was accepted")
 	}
-	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.4.1"}); got != "update" {
+	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.4.2"}); got != "update" {
 		t.Fatalf("effective command = %q", got)
 	}
 }
@@ -300,6 +300,59 @@ func TestPackVerifyUnpackRoundTrip(t *testing.T) {
 	identityInfo, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".sugyeol", "identity.json"))
 	if err != nil || identityInfo.Mode().Perm() != 0600 {
 		t.Fatalf("identity mode: %v, %v", identityInfo, err)
+	}
+}
+
+func TestUnpackResolvesMultiplePackagePrefixes(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Prefix Signer", "prefix@example.com")
+	inputDir := t.TempDir()
+	alpha := filepath.Join(inputDir, "alpha")
+	beta := filepath.Join(inputDir, "beta")
+	if err := os.WriteFile(alpha, []byte("alpha payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(beta, []byte("beta payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	packageDir := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(packageDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+	if err := pack(alpha, "foo", 1<<20, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack(beta, "bar", 1<<20, false); err != nil {
+		t.Fatal(err)
+	}
+
+	packages, err := resolveUnpackPackages([]string{"foo", "bar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packages) != 2 {
+		t.Fatalf("resolved package count = %d", len(packages))
+	}
+	restore := t.TempDir()
+	if err := run([]string{"unpack", "-o", restore, "foo", "bar"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"alpha": "alpha payload", "beta": "beta payload"} {
+		got, err := os.ReadFile(filepath.Join(restore, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q", name, got)
+		}
+	}
+	if _, err := resolveUnpackPackages([]string{"missing"}); err == nil {
+		t.Fatal("missing prefix was accepted")
 	}
 }
 

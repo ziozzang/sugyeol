@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-var version = "1.4.1"
+var version = "1.4.2"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -211,12 +211,14 @@ func run(args []string) error {
 			password, err = passwordBytes(*passwordText)
 		} else if *passwordFile != "" {
 			password, err = readEncryptionPassword(*passwordFile, false)
-			if err != nil {
-				return err
-			}
+		}
+		if err != nil {
+			return err
+		}
+		if len(password) > 0 {
 			defer clearBytes(password)
 		}
-		return unpackWithPassword(fs.Args(), *out, password)
+		return unpackSelectorsWithPassword(fs.Args(), *out, password)
 	case "version", "--version", "-version":
 		fmt.Println("sugyeol", version)
 		return nil

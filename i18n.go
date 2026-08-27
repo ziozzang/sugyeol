@@ -10,24 +10,26 @@ var currentLanguage = detectLanguage()
 
 var messages = map[string]map[string]string{
 	"en": {
-		"command_required": "a command is required",
-		"unknown_command":  "unknown command %q",
-		"pack_usage":       "usage: sugyeol pack -size 10MiB -out backup <file|directory>",
-		"verify_files":     "specify .zip parts to verify",
-		"unpack_files":     "specify .zip parts to restore",
-		"size_help":        "maximum part size (unitless values are MB; e.g. 10, 10MiB, 1GB)",
-		"parts_help":       "split into exactly this many non-empty parts (mutually exclusive with size)",
-		"out_help":         "output filename prefix",
-		"scramble_help":    "enable reversible payload scrambling",
-		"compression_help": "ZIP compression: none, fastest, default, highest, or 0..9",
-		"restore_help":     "restore destination directory",
+		"command_required":     "a command is required",
+		"unknown_command":      "unknown command %q",
+		"pack_usage":           "usage: sugyeol pack -size 10MiB -out backup <file|directory>",
+		"verify_files":         "specify .zip parts to verify",
+		"unpack_files":         "specify package prefixes, ZIP parts, or glob patterns to restore",
+		"unpack_no_match":      "no package parts match %q",
+		"unpack_root_conflict": "multiple packages restore the same root name %q",
+		"size_help":            "maximum part size (unitless values are MB; e.g. 10, 10MiB, 1GB)",
+		"parts_help":           "split into exactly this many non-empty parts (mutually exclusive with size)",
+		"out_help":             "output filename prefix",
+		"scramble_help":        "enable reversible payload scrambling",
+		"compression_help":     "ZIP compression: none, fastest, default, highest, or 0..9",
+		"restore_help":         "restore destination directory",
 		"usage": `sugyeol - signed split ZIP creator/verifier/restorer
 
   Global UI: sugyeol [--lang en|ko] [--verbose|-v] [--debug] [--progress auto|always|never] <command>
 
   sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <file|directory>
   sugyeol verify backup_part-*.zip
-  sugyeol unpack -out <directory> backup_part-*.zip
+  sugyeol unpack [-out <directory>] <prefix|part.zip|glob> [more prefixes...]
   sugyeol sign -out source.meta <file|directory>
   sugyeol countersign -source <file|directory> -pubkey trusted.pem source.meta
   sugyeol verify -source <file|directory> source.meta
@@ -105,24 +107,26 @@ var messages = map[string]map[string]string{
 		"progress_working":         "%s: working (%s)\n",
 	},
 	"ko": {
-		"command_required": "명령이 필요합니다",
-		"unknown_command":  "알 수 없는 명령 %q",
-		"pack_usage":       "사용법: sugyeol pack -size 10MiB -out backup <파일|디렉터리>",
-		"verify_files":     "검사할 .zip 파트를 지정하세요",
-		"unpack_files":     "복구할 .zip 파트를 지정하세요",
-		"size_help":        "파트의 최대 크기 (단위 생략 시 MB; 예: 10, 10MiB, 1GB)",
-		"parts_help":       "비어 있지 않은 파트를 정확히 이 개수로 생성 (size와 동시 사용 불가)",
-		"out_help":         "출력 파일 접두사",
-		"scramble_help":    "가역 payload 스크램블링 사용",
-		"compression_help": "ZIP 압축: none, fastest, default, highest 또는 0..9",
-		"restore_help":     "복구 대상 디렉터리",
+		"command_required":     "명령이 필요합니다",
+		"unknown_command":      "알 수 없는 명령 %q",
+		"pack_usage":           "사용법: sugyeol pack -size 10MiB -out backup <파일|디렉터리>",
+		"verify_files":         "검사할 .zip 파트를 지정하세요",
+		"unpack_files":         "복구할 패키지 접두사, ZIP 파트 또는 glob 패턴을 지정하세요",
+		"unpack_no_match":      "%q에 일치하는 패키지 파트가 없습니다",
+		"unpack_root_conflict": "여러 패키지가 같은 루트 이름 %q을(를) 복구합니다",
+		"size_help":            "파트의 최대 크기 (단위 생략 시 MB; 예: 10, 10MiB, 1GB)",
+		"parts_help":           "비어 있지 않은 파트를 정확히 이 개수로 생성 (size와 동시 사용 불가)",
+		"out_help":             "출력 파일 접두사",
+		"scramble_help":        "가역 payload 스크램블링 사용",
+		"compression_help":     "ZIP 압축: none, fastest, default, highest 또는 0..9",
+		"restore_help":         "복구 대상 디렉터리",
 		"usage": `sugyeol - 서명된 분할 ZIP 생성/검사/복구
 
   전역 UI: sugyeol [--lang en|ko] [--verbose|-v] [--debug] [--progress auto|always|never] <명령>
 
   sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <파일|디렉터리>
   sugyeol verify backup_part-*.zip
-  sugyeol unpack -out <디렉터리> backup_part-*.zip
+  sugyeol unpack [-out <디렉터리>] <접두사|파트.zip|glob> [추가 접두사...]
   sugyeol sign -out source.meta <파일|디렉터리>
   sugyeol countersign -source <파일|디렉터리> -pubkey trusted.pem source.meta
   sugyeol verify -source <파일|디렉터리> source.meta
