@@ -16,6 +16,37 @@ func unpackWithPassword(paths []string, out string, password []byte) (resultErr 
 	if err != nil {
 		return err
 	}
+	return unpackVerifiedParts(parts, out, password)
+}
+
+func unpackSelectorsWithPassword(selectors []string, out string, password []byte) error {
+	packages, err := resolveUnpackPackages(selectors)
+	if err != nil {
+		return err
+	}
+	verified := make([][]verifiedPart, 0, len(packages))
+	roots := make(map[string]bool)
+	for _, pkg := range packages {
+		parts, err := verifyParts(pkg.paths, false)
+		if err != nil {
+			return err
+		}
+		root := parts[0].m.SourceName
+		if roots[root] {
+			return fmt.Errorf(tr("unpack_root_conflict"), root)
+		}
+		roots[root] = true
+		verified = append(verified, parts)
+	}
+	for _, parts := range verified {
+		if err := unpackVerifiedParts(parts, out, password); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func unpackVerifiedParts(parts []verifiedPart, out string, password []byte) (resultErr error) {
 	tarFile, err := createWorkingTemp("sugyeol-restore-*.tar")
 	if err != nil {
 		return err

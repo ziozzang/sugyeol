@@ -24,7 +24,7 @@ registry image ─────── native pull ──> OCI tar/tgz ──> sig
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.4.1**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+Current release: **v1.4.2**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## Build and install
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.4.1` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.4.2` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
 ## Progress, verbose output, debug output, and cancellation
 
@@ -148,6 +148,9 @@ Encryption uses 4 MiB streaming AES-256-GCM chunks. Argon2id derives one package
 ## Verify and restore packages
 
 ```sh
+sugyeol unpack foo
+sugyeol unpack foo bar
+
 sugyeol verify backup_part-*.zip
 sugyeol unpack --out ./restored backup_part-*.zip
 sugyeol unpack -o ./restored backup_part-*.zip
@@ -156,6 +159,8 @@ sugyeol unpack -o ./restored backup_part-*.zip
 sugyeol verify --pubkey jane-public.pem backup_part-*.zip
 sugyeol verify -k jane-public.pem backup_part-*.zip
 ```
+
+Each unpack argument may be a package prefix (`foo`), a literal ZIP part, or a quoted glob. A prefix automatically discovers both current `foo_part-*.zip` and legacy `foo.part-*.zip` names. Multiple prefixes are grouped by their signed package set IDs, fully verified first, and then restored into the selected output directory. Sugyeol rejects a multi-package command when two packages would restore the same root name rather than silently overwrite one with the other.
 
 Verification checks ZIP structure, canonical manifest encoding, Ed25519 signature, public-key consistency, SHA-256 payload hashes, part count/order/offsets, encryption/compression parameters, and the declared maximum size. Restoration repeats verification and then safely extracts the TAR while rejecting traversal paths, links, and unsupported entries.
 
@@ -253,7 +258,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.4.1  # short: -v v1.4.1
+sugyeol update --version v1.4.2  # short: -v v1.4.2
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -265,12 +270,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.4.1
+make release VERSION=1.4.2
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.4.1 \
-  dist/sugyeol_1.4.1_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.1"
+gh release create v1.4.2 \
+  dist/sugyeol_1.4.2_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.2"
 ```
 
 ## Security boundaries
