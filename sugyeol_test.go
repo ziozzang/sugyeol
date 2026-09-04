@@ -72,7 +72,7 @@ func TestDefaultAboutIncludesProjectAndAuthor(t *testing.T) {
 	setLanguage("en")
 	var output bytes.Buffer
 	printAbout(&output)
-	for _, want := range []string{"Sugyeol " + version, "Jioh Jung <jioh@jung.net>", "https://github.com/ziozzang/sugyeol", "MIT"} {
+	for _, want := range []string{"Sugyeol " + version, "Jioh Jung <jioh@jung.net>", "https://github.com/ziozzang/sugyeol", "MIT", "NAME", "SYNOPSIS", "DESCRIPTION", "COMMANDS", "pack", "unpack", "countersign", "image pull", "image sbom", "QUICK START", "GLOBAL OPTIONS", "FILES", "SECURITY", "EXIT STATUS", "SEE ALSO", "sugyeol help"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("about output missing %q: %q", want, output.String())
 		}

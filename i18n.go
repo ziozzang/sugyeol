@@ -10,11 +10,72 @@ var currentLanguage = detectLanguage()
 
 var messages = map[string]map[string]string{
 	"en": {
-		"about": `Sugyeol %s
-Signed packaging, cumulative signatures, container archives, and SPDX SBOMs.
-Author:  Jioh Jung <jioh@jung.net>
-GitHub:  https://github.com/ziozzang/sugyeol
-License: MIT
+		"about": `SUGYEOL(1)                   User Commands                  SUGYEOL(1)
+
+NAME
+  Sugyeol %s - signed packaging, cumulative signatures, container archives,
+  and SPDX SBOM generation
+
+SYNOPSIS
+  sugyeol [--lang en|ko] [--verbose|-v] [--debug]
+           [--progress auto|always|never] <command> [options] [arguments]
+  sugyeol                         Show this concise manual.
+
+DESCRIPTION
+  Sugyeol signs files and directories directly or packages them as bounded,
+  signed split ZIP files. It also downloads, retags, signs, verifies, and
+  inventories OCI/Docker container archives without requiring Docker.
+
+  Author:  Jioh Jung <jioh@jung.net>
+  GitHub:  https://github.com/ziozzang/sugyeol
+  License: MIT
+
+COMMANDS
+  key init       Create the local Ed25519 identity and private key.
+  key            Export the public key; the private key stays under ~/.sugyeol.
+  pack           Package a file/directory into signed size- or count-split ZIP parts.
+  unpack         Verify and restore complete package sets from prefixes, fragments, globs, or directories.
+  verify         Verify split ZIPs, or verify a file/directory against detached .meta signatures.
+  sign           Create SHA-256/Ed25519 detached .meta signatures without packaging.
+  countersign    Append a signature only after validating the subject and every prior signature.
+  image pull     Download from a registry without Docker and create a Docker-loadable OCI tar/tgz.
+  image sign     Sign a local OCI/docker-save archive; image countersign appends a validated signature.
+  image verify   Verify the image graph, archive hash, signature chain, signer, and pinned keys.
+  image sbom     Generate native SPDX 2.3 package/file SBOMs; add verify to validate binding/signatures.
+  update         Check for or install a signed GitHub release update.
+  version        Print only the version. about/info prints this guide; help prints full syntax.
+
+QUICK START
+  sugyeol key init -n "Jane Doe" -e jane@example.com
+  sugyeol pack -s 1900 -o backup ./source
+  sugyeol verify backup_part-*.zip
+  sugyeol unpack -o ./restored backup_part-000001
+  sugyeol sign -o source.meta ./source
+  sugyeol verify -s ./source source.meta
+  sugyeol image pull -S -B -t alpine:260904 alpine:latest
+  sugyeol image verify -k signer.pem alpine-260904.oci.tar
+  sugyeol image sbom verify alpine-260904.oci.tar alpine-260904.spdx.json
+
+GLOBAL OPTIONS
+  --lang en|ko  --verbose|-v  --debug  --progress auto|always|never  --no-progress
+
+FILES
+  ~/.sugyeol/       Local identity and Ed25519 private key (mode 0600).
+  ./tmp/            Same-filesystem temporary workspace, removed after use.
+  *.meta            Detached signature chain containing signatures and public keys.
+  *_part-*.zip      Signed split-package parts with embedded hashes/key/signature.
+
+SECURITY
+  Pin expected signer keys with -k/--pubkey. A valid embedded signature proves
+  integrity but does not independently establish the signer's identity.
+
+EXIT STATUS
+  0  Success.   1  Validation/operation failure.   130  Canceled by Ctrl+C.
+
+SEE ALSO
+  sugyeol help      Complete command syntax.
+  README.md         Detailed workflows, formats, security model, and examples.
+  https://github.com/ziozzang/sugyeol
 `,
 		"command_required":             "a command is required",
 		"unknown_command":              "unknown command %q",
@@ -120,11 +181,72 @@ License: MIT
 		"progress_working":         "%s: working (%s)\n",
 	},
 	"ko": {
-		"about": `수결(Sugyeol) %s
-서명 패키징, 누적 서명, 컨테이너 아카이브와 SPDX SBOM 도구입니다.
-작성자:  Jioh Jung <jioh@jung.net>
-GitHub:  https://github.com/ziozzang/sugyeol
-라이선스: MIT
+		"about": `수결(1)                       사용자 명령                       수결(1)
+
+이름
+  수결(Sugyeol) %s - 서명 패키징, 누적 서명, 컨테이너 아카이브와
+  SPDX SBOM 생성 도구
+
+사용법
+  sugyeol [--lang en|ko] [--verbose|-v] [--debug]
+           [--progress auto|always|never] <명령> [옵션] [인자]
+  sugyeol                         이 축약 매뉴얼을 표시합니다.
+
+설명
+  파일과 디렉터리를 직접 서명하거나 지정 크기를 넘지 않는 서명된 분할
+  ZIP으로 패키징합니다. Docker 없이 OCI/Docker 컨테이너 아카이브를 받고,
+  태그 변경, 서명, 검증과 package/file 수준 inventory를 수행할 수 있습니다.
+
+  작성자:  Jioh Jung <jioh@jung.net>
+  GitHub:  https://github.com/ziozzang/sugyeol
+  라이선스: MIT
+
+명령 목록:
+  key init       로컬 Ed25519 신원과 개인키를 생성합니다.
+  key            공개키를 내보냅니다. 개인키는 ~/.sugyeol 밖으로 복사하지 않습니다.
+  pack           파일/디렉터리를 서명하고 크기 또는 개수 기준 분할 ZIP으로 패킹합니다.
+  unpack         접두사·파일명 일부·glob·디렉터리에서 전체 package set을 찾아 검증·복구합니다.
+  verify         분할 ZIP을 검증하거나 detached .meta와 원본 파일/디렉터리를 검증합니다.
+  sign           패킹하지 않고 SHA-256/Ed25519 detached .meta 서명을 만듭니다.
+  countersign    원본과 이전 서명 체인을 모두 검증한 뒤 누적 서명을 추가합니다.
+  image pull     Docker 없이 registry에서 받아 Docker-load 가능한 OCI tar/tgz를 만듭니다.
+  image sign     로컬 OCI/docker-save archive를 서명하며 image countersign으로 검증 후 누적 서명합니다.
+  image verify   image graph, archive hash, 서명 체인, signer와 고정 공개키를 검증합니다.
+  image sbom     네이티브 SPDX 2.3 package/file SBOM을 만들며 verify로 결합·서명을 검사합니다.
+  update         서명된 GitHub release 업데이트를 확인하거나 설치합니다.
+  version        버전만 출력합니다. about/info는 이 안내, help는 전체 문법을 출력합니다.
+
+빠른 시작:
+  sugyeol key init -n "홍길동" -e hong@example.com
+  sugyeol pack -s 1900 -o backup ./source
+  sugyeol verify backup_part-*.zip
+  sugyeol unpack -o ./restored backup_part-000001
+  sugyeol sign -o source.meta ./source
+  sugyeol verify -s ./source source.meta
+  sugyeol image pull -S -B -t alpine:260904 alpine:latest
+  sugyeol image verify -k signer.pem alpine-260904.oci.tar
+  sugyeol image sbom verify alpine-260904.oci.tar alpine-260904.spdx.json
+
+전역 UI:
+  --lang en|ko  --verbose|-v  --debug  --progress auto|always|never  --no-progress
+
+파일
+  ~/.sugyeol/       로컬 identity와 Ed25519 개인키(mode 0600).
+  ./tmp/            같은 파일시스템의 임시 작업공간. 작업 후 제거합니다.
+  *.meta            서명, 공개키와 누적 연결을 담은 detached 서명 체인.
+  *_part-*.zip      hash/key/signature를 내부에 담은 서명 분할 패키지.
+
+보안
+  기대한 signer 공개키는 -k/--pubkey로 고정하세요. 내장키 서명만으로도
+  무결성은 증명하지만 signer의 실제 신원을 독립적으로 보증하지는 않습니다.
+
+종료 상태
+  0  성공.   1  검증/작업 실패.   130  Ctrl+C로 취소.
+
+함께 보기
+  sugyeol help      전체 명령 문법.
+  README_KO.md      상세 workflow, format, 보안 모델과 예시.
+  https://github.com/ziozzang/sugyeol
 `,
 		"command_required":             "명령이 필요합니다",
 		"unknown_command":              "알 수 없는 명령 %q",

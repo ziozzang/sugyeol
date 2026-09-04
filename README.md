@@ -24,9 +24,9 @@ registry image ─────── native pull ──> OCI tar/tgz ──> run
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.6.2**. Author: **Jioh Jung <jioh@jung.net>**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>. License: MIT.
+Current release: **v1.6.3**. Author: **Jioh Jung <jioh@jung.net>**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>. License: MIT.
 
-Running `sugyeol` with no arguments prints the localized project information. The same output is available explicitly with `sugyeol about` (alias: `info`).
+Running `sugyeol` with no arguments prints localized project information, command descriptions, global UI flags, and practical quick-start examples. The same guide is available explicitly with `sugyeol about` (alias: `info`); `sugyeol help` prints the complete command syntax.
 
 ## Build and install
 
@@ -38,7 +38,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.6.2` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.6.3` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
 ## Progress, verbose output, debug output, and cancellation
 
@@ -307,7 +307,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.6.2  # short: -v v1.6.2
+sugyeol update --version v1.6.3  # short: -v v1.6.3
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -319,12 +319,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.6.2
+make release VERSION=1.6.3
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.6.2 \
-  dist/sugyeol_1.6.2_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.2"
+gh release create v1.6.3 \
+  dist/sugyeol_1.6.3_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.3"
 ```
 
 ## Security boundaries
