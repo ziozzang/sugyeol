@@ -21,6 +21,8 @@ const (
 	ociManifestMediaType          = "application/vnd.oci.image.manifest.v1+json"
 	dockerIndexMediaType          = "application/vnd.docker.distribution.manifest.list.v2+json"
 	dockerManifestMediaType       = "application/vnd.docker.distribution.manifest.v2+json"
+	ociConfigMediaType            = "application/vnd.oci.image.config.v1+json"
+	dockerConfigMediaType         = "application/vnd.docker.container.image.v1+json"
 	containerArchiveFormat        = "sugyeol-container-archive"
 	maxContainerMetadata    int64 = 16 << 20
 )
@@ -53,16 +55,25 @@ type ociManifest struct {
 }
 
 type localImageSubject struct {
-	Format          string          `json:"format"`
-	Version         int             `json:"version"`
-	ArchiveFormat   string          `json:"archive_format"`
-	ArchiveFile     string          `json:"archive_file"`
-	ArchiveSize     int64           `json:"archive_size"`
-	ArchiveSHA256   string          `json:"archive_sha256"`
-	Compression     string          `json:"compression"`
-	IndexSHA256     string          `json:"index_sha256,omitempty"`
-	References      []string        `json:"references,omitempty"`
-	RootDescriptors []ociDescriptor `json:"root_descriptors,omitempty"`
+	Format        string `json:"format"`
+	Version       int    `json:"version"`
+	ArchiveFormat string `json:"archive_format"`
+	// Derived from archive contents for UI only. Excluding it from signed
+	// metadata keeps existing v2 sidecars byte-for-byte verifiable.
+	DockerCompatible bool            `json:"-"`
+	ArchiveFile      string          `json:"archive_file"`
+	ArchiveSize      int64           `json:"archive_size"`
+	ArchiveSHA256    string          `json:"archive_sha256"`
+	Compression      string          `json:"compression"`
+	IndexSHA256      string          `json:"index_sha256,omitempty"`
+	References       []string        `json:"references,omitempty"`
+	RootDescriptors  []ociDescriptor `json:"root_descriptors,omitempty"`
+}
+
+type dockerArchiveManifestItem struct {
+	Config   string   `json:"Config"`
+	RepoTags []string `json:"RepoTags,omitempty"`
+	Layers   []string `json:"Layers"`
 }
 
 type archiveEntry struct {
@@ -137,6 +148,16 @@ func inspectContainerArchive(filePath string) (subject localImageSubject, result
 	if layoutBytes, ok := small["oci-layout"]; ok {
 		if err := inspectOCILayout(entries, small, layoutBytes, &subject); err != nil {
 			return localImageSubject{}, err
+		}
+		if manifestBytes, ok := small["manifest.json"]; ok {
+			refs, err := validateDockerManifest(entries, manifestBytes)
+			if err != nil {
+				return localImageSubject{}, fmt.Errorf("invalid Docker compatibility metadata: %w", err)
+			}
+			subject.DockerCompatible = true
+			if len(refs) > 0 {
+				subject.References = refs
+			}
 		}
 		return subject, nil
 	}
@@ -318,29 +339,37 @@ func validateOCIDescriptorGraph(d ociDescriptor, entries map[string]archiveEntry
 }
 
 func inspectDockerArchive(entries map[string]archiveEntry, manifestBytes []byte, subject *localImageSubject) error {
-	var manifests []struct {
-		Config   string   `json:"Config"`
-		RepoTags []string `json:"RepoTags"`
-		Layers   []string `json:"Layers"`
+	refs, err := validateDockerManifest(entries, manifestBytes)
+	if err != nil {
+		return err
 	}
+	subject.ArchiveFormat = "docker-save"
+	subject.DockerCompatible = true
+	subject.References = refs
+	return nil
+}
+
+func validateDockerManifest(entries map[string]archiveEntry, manifestBytes []byte) ([]string, error) {
+	var manifests []dockerArchiveManifestItem
 	if err := json.Unmarshal(manifestBytes, &manifests); err != nil || len(manifests) == 0 {
-		return fmt.Errorf("invalid docker-save manifest.json")
+		return nil, fmt.Errorf("invalid docker-save manifest.json")
 	}
 	refs := make([]string, 0)
 	for _, manifest := range manifests {
+		if manifest.Config == "" {
+			return nil, fmt.Errorf("docker archive manifest has no config")
+		}
 		for _, name := range append([]string{manifest.Config}, manifest.Layers...) {
 			clean := strings.TrimPrefix(path.Clean(strings.ReplaceAll(name, "\\", "/")), "./")
 			if clean == "" || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-				return fmt.Errorf("unsafe docker archive reference %q", name)
+				return nil, fmt.Errorf("unsafe docker archive reference %q", name)
 			}
 			if _, ok := entries[clean]; !ok {
-				return fmt.Errorf("docker archive entry is missing: %s", clean)
+				return nil, fmt.Errorf("docker archive entry is missing: %s", clean)
 			}
 		}
 		refs = append(refs, manifest.RepoTags...)
 	}
 	sort.Strings(refs)
-	subject.ArchiveFormat = "docker-save"
-	subject.References = refs
-	return nil
+	return refs, nil
 }

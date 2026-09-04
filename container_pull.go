@@ -42,6 +42,8 @@ func imagePullCommand(args []string) error {
 	signAfterPull := fs.Bool("sign", false, "sign the verified local archive after download")
 	metaOut := fs.String("meta", "", "signature metadata output path (requires sign)")
 	label := fs.String("label", "", "optional signed role/purpose label")
+	sbomOut := fs.String("sbom", "", "generate an SPDX 2.3 SBOM at this path")
+	signSBOM := fs.Bool("sign-sbom", false, "sign the generated SBOM (requires sbom)")
 	fs.StringVar(out, "o", "", "output OCI image-layout .tar or .tgz")
 	fs.StringVar(platform, "p", runtime.GOOS+"/"+runtime.GOARCH, "platform os/arch[/variant]")
 	fs.BoolVar(allPlatforms, "a", false, "download every platform from an image index")
@@ -49,6 +51,8 @@ func imagePullCommand(args []string) error {
 	fs.BoolVar(signAfterPull, "S", false, "sign the verified local archive after download")
 	fs.StringVar(metaOut, "m", "", "signature metadata output path (requires sign)")
 	fs.StringVar(label, "l", "", "optional signed role/purpose label")
+	fs.StringVar(sbomOut, "b", "", "generate an SPDX 2.3 SBOM at this path")
+	fs.BoolVar(signSBOM, "B", false, "sign the generated SBOM (requires sbom)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -57,6 +61,9 @@ func imagePullCommand(args []string) error {
 	}
 	if *metaOut != "" && !*signAfterPull {
 		return fmt.Errorf("--meta requires --sign")
+	}
+	if *signSBOM && *sbomOut == "" {
+		return fmt.Errorf("--sign-sbom requires --sbom")
 	}
 	wanted, err := parseOCIPlatform(*platform)
 	if err != nil {
@@ -77,7 +84,7 @@ func imagePullCommand(args []string) error {
 	if strings.HasSuffix(strings.ToLower(*out), ".tgz") || strings.HasSuffix(strings.ToLower(*out), ".tar.gz") {
 		*gzipOutput = true
 	}
-	uiDebugf("image pull reference=%q output=%q platform=%q all_platforms=%t gzip=%t sign=%t", fs.Arg(0), *out, *platform, *allPlatforms, *gzipOutput, *signAfterPull)
+	uiDebugf("image pull reference=%q output=%q platform=%q all_platforms=%t gzip=%t sign=%t sbom=%q sign_sbom=%t", fs.Arg(0), *out, *platform, *allPlatforms, *gzipOutput, *signAfterPull, *sbomOut, *signSBOM)
 	ctx, cancel := context.WithTimeout(commandContext, 24*time.Hour)
 	defer cancel()
 	puller := &registryPuller{ref: ref, client: &http.Client{Timeout: 0}, blobs: make(map[string]pulledBlob), allPlatforms: *allPlatforms, platform: wanted}
@@ -87,14 +94,14 @@ func imagePullCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := puller.writeArchive(ctx, *out, fs.Arg(0), roots, *gzipOutput); err != nil {
+	if err := puller.writeArchive(ctx, *out, roots, *gzipOutput); err != nil {
 		return err
 	}
 	subject, err := inspectContainerArchive(*out)
 	if err != nil {
 		return fmt.Errorf("verify downloaded image archive: %w", err)
 	}
-	fmt.Printf("container image downloaded: %s\narchive: %s\nformat: %s\nsha256: %s\n", fs.Arg(0), *out, subject.ArchiveFormat, subject.ArchiveSHA256)
+	fmt.Printf("container image downloaded: %s\narchive: %s\nformat: %s\ndocker load compatible: %t\nsha256: %s\n", fs.Arg(0), *out, subject.ArchiveFormat, subject.DockerCompatible, subject.ArchiveSHA256)
 	if *signAfterPull {
 		signArgs := make([]string, 0, 5)
 		if *metaOut != "" {
@@ -104,7 +111,15 @@ func imagePullCommand(args []string) error {
 			signArgs = append(signArgs, "-l", *label)
 		}
 		signArgs = append(signArgs, *out)
-		return imageSignCommand(signArgs)
+		if err := imageSignCommand(signArgs); err != nil {
+			return err
+		}
+	}
+	if *sbomOut != "" {
+		if *allPlatforms {
+			return fmt.Errorf("SBOM generation currently requires one platform; use --platform without --all-platforms")
+		}
+		return generateImageSBOM(*out, *sbomOut, *signSBOM, "sbom")
 	}
 	return nil
 }
@@ -289,7 +304,7 @@ func (p *registryPuller) get(ctx context.Context, endpointPath, accept string) (
 	return request(p.authorization)
 }
 
-func (p *registryPuller) writeArchive(ctx context.Context, output, reference string, roots []ociDescriptor, gzipOutput bool) (resultErr error) {
+func (p *registryPuller) writeArchive(ctx context.Context, output string, roots []ociDescriptor, gzipOutput bool) (resultErr error) {
 	if _, err := os.Lstat(output); err == nil {
 		return fmt.Errorf("output already exists: %s", output)
 	} else if !os.IsNotExist(err) {
@@ -323,21 +338,34 @@ func (p *registryPuller) writeArchive(ctx context.Context, output, reference str
 	tw := tar.NewWriter(outer)
 	layout := []byte("{\"imageLayoutVersion\":\"1.0.0\"}\n")
 	index := ociIndex{SchemaVersion: 2, MediaType: ociIndexMediaType, Manifests: append([]ociDescriptor(nil), roots...)}
+	dockerTag, canonicalName, refName, hasTag := p.dockerNames()
 	for i := range index.Manifests {
 		if index.Manifests[i].Annotations == nil {
 			index.Manifests[i].Annotations = make(map[string]string)
 		}
-		index.Manifests[i].Annotations["org.opencontainers.image.ref.name"] = reference
+		index.Manifests[i].Annotations["io.containerd.image.name"] = canonicalName
+		if hasTag {
+			index.Manifests[i].Annotations["org.opencontainers.image.ref.name"] = refName
+		} else {
+			delete(index.Manifests[i].Annotations, "org.opencontainers.image.ref.name")
+		}
 	}
 	indexBytes, err := json.Marshal(index)
 	if err != nil {
 		return err
 	}
 	indexBytes = append(indexBytes, '\n')
+	dockerManifest, err := p.buildDockerCompatibilityManifest(roots, dockerTag)
+	if err != nil {
+		return err
+	}
 	if err := writeContainerTarBytes(tw, "oci-layout", layout); err != nil {
 		return err
 	}
 	if err := writeContainerTarBytes(tw, "index.json", indexBytes); err != nil {
+		return err
+	}
+	if err := writeContainerTarBytes(tw, "manifest.json", dockerManifest); err != nil {
 		return err
 	}
 	digests := make([]string, 0, len(p.blobs))
@@ -423,6 +451,93 @@ func (p *registryPuller) writeArchive(ctx context.Context, output, reference str
 	ok = true
 	progress.Finish(nil)
 	return nil
+}
+
+func (p *registryPuller) dockerNames() (dockerTag, canonicalName, refName string, hasTag bool) {
+	host := p.ref.Registry
+	if host == "registry-1.docker.io" {
+		host = "docker.io"
+	}
+	canonicalName = host + "/" + p.ref.Repository
+	if strings.HasPrefix(p.ref.Identifier, "sha256:") {
+		return "", canonicalName + "@" + p.ref.Identifier, "", false
+	}
+	refName = p.ref.Identifier
+	canonicalName += ":" + refName
+	repository := p.ref.Repository
+	if host == "docker.io" {
+		repository = strings.TrimPrefix(repository, "library/")
+	} else {
+		repository = host + "/" + repository
+	}
+	return repository + ":" + refName, canonicalName, refName, true
+}
+
+func (p *registryPuller) buildDockerCompatibilityManifest(roots []ociDescriptor, dockerTag string) ([]byte, error) {
+	items := make([]dockerArchiveManifestItem, 0)
+	visited := make(map[string]bool)
+	var visit func(ociDescriptor) error
+	visit = func(descriptor ociDescriptor) error {
+		if visited[descriptor.Digest] {
+			return nil
+		}
+		visited[descriptor.Digest] = true
+		blob, ok := p.blobs[descriptor.Digest]
+		if !ok || len(blob.data) == 0 {
+			return fmt.Errorf("missing image manifest metadata %s", descriptor.Digest)
+		}
+		switch descriptor.MediaType {
+		case ociIndexMediaType, dockerIndexMediaType:
+			var index ociIndex
+			if err := json.Unmarshal(blob.data, &index); err != nil || index.SchemaVersion != 2 {
+				return fmt.Errorf("invalid image index %s", descriptor.Digest)
+			}
+			for _, child := range index.Manifests {
+				if err := visit(child); err != nil {
+					return err
+				}
+			}
+		case ociManifestMediaType, dockerManifestMediaType:
+			var manifest ociManifest
+			if err := json.Unmarshal(blob.data, &manifest); err != nil || manifest.SchemaVersion != 2 {
+				return fmt.Errorf("invalid image manifest %s", descriptor.Digest)
+			}
+			// An OCI index may also contain attestations and other artifacts. Keep
+			// those in the OCI graph, but do not advertise them as loadable images
+			// in Docker's compatibility manifest.
+			if manifest.Config.MediaType != ociConfigMediaType && manifest.Config.MediaType != dockerConfigMediaType {
+				return nil
+			}
+			item := dockerArchiveManifestItem{Config: containerBlobPath(manifest.Config.Digest), Layers: make([]string, 0, len(manifest.Layers))}
+			if dockerTag != "" {
+				item.RepoTags = []string{dockerTag}
+			}
+			for _, layer := range manifest.Layers {
+				item.Layers = append(item.Layers, containerBlobPath(layer.Digest))
+			}
+			items = append(items, item)
+		default:
+			return fmt.Errorf("unsupported root image media type %q", descriptor.MediaType)
+		}
+		return nil
+	}
+	for _, root := range roots {
+		if err := visit(root); err != nil {
+			return nil, err
+		}
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("image has no Docker-loadable manifests")
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func containerBlobPath(digest string) string {
+	return "blobs/sha256/" + strings.TrimPrefix(digest, "sha256:")
 }
 
 func writeContainerTarBytes(tw *tar.Writer, name string, data []byte) error {

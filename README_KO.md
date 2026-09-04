@@ -10,7 +10,7 @@
 
 <p align="center"><em>약 1400년경 조선 태종의 실제 수결.</em></p>
 
-수결은 서명된 분할 ZIP 패키지, 파일/디렉터리 독립 서명, 누적 countersignature, 컨테이너 이미지 서명, 검증, 복구, 자체 업데이트를 하나의 정적 Go 바이너리로 제공합니다.
+수결은 서명된 분할 ZIP 패키지, 파일/디렉터리 독립 서명, 누적 countersignature, 컨테이너 이미지 다운로드/서명/검증, 내장 SPDX 2.3 SBOM 생성, 복구, 자체 업데이트를 하나의 정적 Go 바이너리로 제공합니다.
 
 전통적인 수결이 문서에 작성자의 신원과 진위를 새겼듯이, 이 도구는 디지털 파일에 서명자의 신원과 무결성을 결합합니다.
 
@@ -19,12 +19,12 @@
                  │
                  └── pack + 선택적 암호화 ──> 서명된 분할 ZIP ──> verify / unpack
 
-원격 컨테이너 이미지 ── 네이티브 pull ──> OCI tar/tgz ──> sign / countersign / verify
+원격 컨테이너 이미지 ── 네이티브 pull ──> OCI tar/tgz ──> 실행 / SPDX SBOM / 서명 / 검증
 ```
 
 ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
-현재 릴리스는 **v1.4.2**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
+현재 릴리스는 **v1.5.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## 빌드와 설치
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.4.2`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+`make release VERSION=1.5.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
 
 ## 진행률·상세 출력·디버그·취소
 
@@ -218,6 +218,25 @@ sugyeol image pull -o app.oci.tar -p linux/amd64 registry.example.com/team/app:1
 # .tgz/.tar.gz 출력은 gzip을 자동 선택하며 -z도 쓸 수 있습니다.
 sugyeol image pull -o app.oci.tgz -z -p linux/arm64 registry.example.com/team/app:1.2.3
 
+# 아카이브 생성에는 Docker가 필요 없습니다. 설치된 런타임/도구로 가져오고 실행할 수 있습니다.
+docker load < app.oci.tar
+docker run --pull=never --rm registry.example.com/team/app:1.2.3
+nerdctl load -i app.oci.tar
+ctr images import app.oci.tar
+podman load -i app.oci.tar
+
+# 패키지/파일 수준 SPDX 2.3 SBOM을 만들고 선택적으로 서명합니다.
+sugyeol image sbom -o app.spdx.json app.oci.tar
+sugyeol image sbom -S -l security-scan -o app.spdx.json app.oci.tar
+
+# SBOM과 아카이브의 결합을 검사한 뒤 고정한 공개키로 서명자도 검증합니다.
+sugyeol image sbom verify app.oci.tar app.spdx.json
+sugyeol image sbom verify -k scanner.pem app.oci.tar app.spdx.json app.spdx.json.meta
+
+# 다운로드, SBOM 생성, 두 산출물 서명을 한 번에 수행합니다.
+sugyeol image pull -S -m app.image.meta -b app.spdx.json -B \
+  -o app.oci.tar registry.example.com/team/app:1.2.3
+
 # 멀티 플랫폼 index의 모든 manifest를 받습니다.
 sugyeol image pull -a -o app-all.oci.tar registry.example.com/team/app:1.2.3
 
@@ -237,11 +256,19 @@ sugyeol image countersign -k release.pem -l security-review app.oci.tgz app.imag
 sugyeol image verify -n 2 -k release.pem -k reviewer.pem app.oci.tgz app.image.meta
 ```
 
-`image pull`은 Distribution API를 직접 사용하는 네이티브 클라이언트이며 `docker pull`을 호출하지 않습니다. 선택한 manifest/index, config, layer blob을 받고 모든 descriptor 크기와 SHA-256을 검사한 뒤 `oci-layout`, `index.json`, content-addressed `blobs/sha256/...`를 담은 표준 OCI Image Layout을 만듭니다. 기본 플랫폼은 현재 OS/아키텍처이고 `-p/--platform os/arch[/variant]` 또는 `-a/--all-platforms`를 쓸 수 있습니다. 익명 접근, Docker `config.json` basic/identity credential, Bearer token challenge를 지원합니다.
+`image pull`은 Distribution API를 직접 사용하는 네이티브 클라이언트이며 Docker, containerd, Podman, nerdctl을 호출하지도 필요로 하지도 않습니다. 선택한 manifest/index, config, layer blob을 받고 모든 descriptor 크기와 SHA-256을 검사한 뒤 `oci-layout`, `index.json`, content-addressed `blobs/sha256/...`를 담은 표준 OCI Image Layout을 만듭니다. 상호운용 가능한 import를 위해 다음 메타데이터를 모두 기록합니다.
+
+- 원래 태그를 담은 OCI `org.opencontainers.image.ref.name`
+- 정규화한 전체 이미지명을 담은 containerd/nerdctl `io.containerd.image.name`
+- `Config`, `Layers`, `RepoTags`를 담은 Docker Image Spec v1.2 `manifest.json` — Docker 호환 Podman/containers-image 경로에서도 사용
+
+결과물은 유효한 OCI Image Layout인 동시에 `docker load`, `nerdctl load`, `ctr images import`, OCI-aware Podman과 Skopeo 계열 도구가 각자 이해하는 메타데이터로 이미지 참조명을 복원할 수 있는 하이브리드 아카이브입니다. `hello-world:latest` 같은 태그 입력은 저장소명과 태그를 유지합니다. Digest만 지정한 입력에는 사실인 태그가 없으므로 image ID/digest로 가져옵니다. Docker 호환 항목은 이미 검증된 OCI blob을 그대로 참조하므로 layer를 복제하거나 재압축하지 않습니다. 기본 플랫폼은 현재 OS/아키텍처이고 `-p/--platform os/arch[/variant]` 또는 `-a/--all-platforms`를 쓸 수 있습니다. 익명 접근, Docker `config.json` basic/identity credential, Bearer token challenge를 지원합니다.
 
 로컬 서명은 무압축/gzip OCI Image Layout과 Docker `docker save` 아카이브를 모두 인식합니다. 서명 전 안전한 TAR 경로만 허용하고 링크/특수 항목을 거부하며, OCI blob 이름과 실제 content hash를 대조하고 index/manifest/config/layer descriptor 전체 그래프를 따라가거나 Docker `manifest.json` 참조를 검사합니다. 서명 subject에는 root descriptor, reference, `index.json` SHA-256, 완성 아카이브 크기/SHA-256, 압축 방식과 포맷이 들어갑니다. 따라서 이미지 의미 변조와 아카이브 바이트 변조를 모두 오프라인에서 탐지합니다.
 
-Pull 단축 옵션은 `-o`(out), `-p`(platform), `-a`(전체 플랫폼), `-z`(gzip), `-S`(서명), `-m`(메타데이터), `-l`(label)입니다. Sign/countersign에는 상황에 따라 `-o`, `-l`, `-k`, `-n`을 씁니다. 변경 가능한 리포지터리/태그 자체를 직접 서명하는 것은 기본 기능으로 두지 않고, 다운로드한 불변 아카이브를 서명 대상으로 삼습니다.
+`image sbom`은 MIT 라이선스 [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner)의 스캐너를 수결에 맞게 가져온 내장 기능이며 Syft, Trivy, Docker 또는 별도 SBOM 실행 파일을 호출하지 않습니다. OCI whiteout 규칙에 따라 image layer를 합치고 무압축/gzip/zstd layer를 처리하며, 최종 regular file을 해시하고 Debian dpkg, Alpine apk, npm lockfile, Go module, Python requirements/dist-info, Cargo lockfile, Maven `pom.properties`를 수집합니다. RPM Berkeley DB/SQLite package database 해석은 아직 지원하지 않습니다. SPDX root package에는 원본 archive의 정확한 SHA-256이 들어갑니다. `image sbom verify`는 이를 다시 계산하며, 선택적으로 하나 이상의 고정한 Ed25519 공개키로 detached SBOM 서명까지 검증합니다. 멀티 플랫폼 archive는 현재 플랫폼별로 생성해야 하므로 `-a/--all-platforms` 대신 `-p/--platform`으로 받습니다.
+
+Pull 단축 옵션은 `-o`(out), `-p`(platform), `-a`(전체 플랫폼), `-z`(gzip), `-S`(archive 서명), `-m`(archive metadata), `-l`(label), `-b`(SBOM 출력), `-B`(SBOM 서명)입니다. SBOM은 `-o`, `-S`, `-l`, SBOM 검증은 `-k`, `-n`을 씁니다. Sign/countersign에는 상황에 따라 `-o`, `-l`, `-k`, `-n`을 씁니다. 변경 가능한 리포지터리/태그 자체를 직접 서명하는 것은 기본 기능으로 두지 않고, 다운로드한 불변 아카이브를 서명 대상으로 삼습니다.
 
 ## 다국어
 
@@ -257,7 +284,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check          # 단축: -c
 sugyeol update --force          # 단축: -f
-sugyeol update --version v1.4.2 # 단축: -v v1.4.2
+sugyeol update --version v1.5.0 # 단축: -v v1.5.0
 ```
 
 현재 플랫폼용 GitHub Release 자산을 받고 `SHA256SUMS`를 확인한 뒤 실행 파일을 원자 교체합니다. 대화형 실행은 최대 24시간에 한 번 실패 허용 방식으로 새 버전 알림만 확인하며 실제 교체에는 항상 `sugyeol update`가 필요합니다. `SUGYEOL_NO_UPDATE_CHECK=1`로 알림 확인을 끌 수 있습니다.
@@ -269,12 +296,12 @@ GitHub Actions는 의도적으로 비활성화했습니다. 직접 빌드·테�
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.4.2
+make release VERSION=1.5.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.4.2 \
-  dist/sugyeol_1.4.2_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.2"
+gh release create v1.5.0 \
+  dist/sugyeol_1.5.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.5.0"
 ```
 
 ## 보안 경계

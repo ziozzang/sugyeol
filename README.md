@@ -10,7 +10,7 @@ English is the primary documentation. [한국어 문서](README_KO.md)
 
 <p align="center"><em>A historical sugyeol: King Taejong's handwritten mark, circa 1400.</em></p>
 
-Sugyeol is one statically linked Go binary for signed split ZIP packages, detached file/directory signatures, cumulative countersignatures, container-image signatures, verification, restoration, and self-update.
+Sugyeol is one statically linked Go binary for signed split ZIP packages, detached file/directory signatures, cumulative countersignatures, container-image pull/sign/verification, embedded SPDX 2.3 SBOM generation, restoration, and self-update.
 
 Like its namesake—the traditional Korean handwritten mark used to authenticate a document—Sugyeol binds identity and integrity to a digital artifact.
 
@@ -19,12 +19,12 @@ file / directory ──┬── sign ──────────────
                   │
                   └── pack + optional encryption ──> signed split ZIPs ──> verify / unpack
 
-registry image ─────── native pull ──> OCI tar/tgz ──> sign / countersign / verify
+registry image ─────── native pull ──> OCI tar/tgz ──> run / SPDX SBOM / sign / verify
 ```
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.4.2**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+Current release: **v1.5.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## Build and install
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.4.2` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.5.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
 ## Progress, verbose output, debug output, and cancellation
 
@@ -219,6 +219,25 @@ sugyeol image pull -o app.oci.tar -p linux/amd64 registry.example.com/team/app:1
 # A .tgz/.tar.gz output implies gzip; -z is also available.
 sugyeol image pull -o app.oci.tgz -z -p linux/arm64 registry.example.com/team/app:1.2.3
 
+# Docker is not required to create the archive. Import and run with an available runtime/tool.
+docker load < app.oci.tar
+docker run --pull=never --rm registry.example.com/team/app:1.2.3
+nerdctl load -i app.oci.tar
+ctr images import app.oci.tar
+podman load -i app.oci.tar
+
+# Generate a package/file-level SPDX 2.3 SBOM and optionally sign it.
+sugyeol image sbom -o app.spdx.json app.oci.tar
+sugyeol image sbom -S -l security-scan -o app.spdx.json app.oci.tar
+
+# Verify the SBOM-to-archive binding, then its signer against a pinned key.
+sugyeol image sbom verify app.oci.tar app.spdx.json
+sugyeol image sbom verify -k scanner.pem app.oci.tar app.spdx.json app.spdx.json.meta
+
+# Pull, generate an SBOM, and sign both artifacts in one operation.
+sugyeol image pull -S -m app.image.meta -b app.spdx.json -B \
+  -o app.oci.tar registry.example.com/team/app:1.2.3
+
 # Pull all manifests in a multi-platform index.
 sugyeol image pull -a -o app-all.oci.tar registry.example.com/team/app:1.2.3
 
@@ -238,11 +257,19 @@ sugyeol image countersign -k release.pem -l security-review app.oci.tgz app.imag
 sugyeol image verify -n 2 -k release.pem -k reviewer.pem app.oci.tgz app.image.meta
 ```
 
-`image pull` is a native Distribution API client; it never invokes `docker pull`. It downloads the selected manifest/index, config, and layer blobs, verifies every descriptor size and SHA-256, and writes a standard OCI Image Layout containing `oci-layout`, `index.json`, and content-addressed `blobs/sha256/...`. The default platform is the current OS/architecture; use `-p/--platform os/arch[/variant]` or `-a/--all-platforms`. Anonymous access, Docker `config.json` basic/identity credentials, and Bearer-token challenges are supported.
+`image pull` is a native Distribution API client; Docker, containerd, Podman, and nerdctl are neither invoked nor required. It downloads the selected manifest/index, config, and layer blobs, verifies every descriptor size and SHA-256, and writes a standard OCI Image Layout containing `oci-layout`, `index.json`, and content-addressed `blobs/sha256/...`. For interoperable import it writes all of the following metadata:
+
+- OCI `org.opencontainers.image.ref.name` with the original tag;
+- containerd/nerdctl `io.containerd.image.name` with the normalized fully qualified image name;
+- Docker Image Spec v1.2 `manifest.json` with `Config`, `Layers`, and `RepoTags`, also consumed by Docker-compatible Podman/containers-image paths.
+
+The resulting hybrid archive remains a valid OCI image layout while `docker load`, `nerdctl load`, `ctr images import`, OCI-aware Podman, and Skopeo-family tooling can recover the image reference through the metadata they understand. Tagged inputs such as `hello-world:latest` retain their repository and tag. Digest-only input has no truthful tag to restore and therefore imports by image ID/digest. Docker-compatible entries reference the already verified OCI blobs, so layer bytes are not duplicated or recompressed. The default platform is the current OS/architecture; use `-p/--platform os/arch[/variant]` or `-a/--all-platforms`. Anonymous access, Docker `config.json` basic/identity credentials, and Bearer-token challenges are supported.
 
 Local signing accepts both OCI Image Layout archives and Docker `docker save` archives, uncompressed or gzip-compressed. Before signing, Sugyeol validates safe TAR paths, rejects links/special entries, checks OCI blob names against their content hashes, follows the complete index/manifest/config/layer descriptor graph, or checks Docker `manifest.json` references. The signature subject contains the root descriptors, references, `index.json` SHA-256, complete archive size/SHA-256, compression, and format. Consequently both semantic image mutation and byte-level archive mutation are detected offline.
 
-Pull short options are `-o` (out), `-p` (platform), `-a` (all platforms), `-z` (gzip), `-S` (sign), `-m` (metadata), and `-l` (label). Sign/countersign use `-o`, `-l`, `-k`, and `-n` as applicable. Direct signing of a mutable repository/tag is intentionally not a primary operation; the downloaded immutable archive is the signed artifact.
+`image sbom` is an embedded scanner adapted from the MIT-licensed [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner); it does not invoke Syft, Trivy, Docker, or another SBOM executable. It merges image layers with OCI whiteout semantics, supports uncompressed, gzip, and zstd layers, hashes the resulting regular files, and catalogs Debian dpkg, Alpine apk, npm lockfiles, Go modules, Python requirements/dist-info, Cargo lockfiles, and Maven `pom.properties`. RPM Berkeley DB/SQLite package databases are not decoded yet. The SPDX root package contains the exact source archive SHA-256. `image sbom verify` recalculates that hash and can additionally validate the detached SBOM signature against one or more pinned Ed25519 public keys. A multi-platform archive must currently be scanned one platform at a time; pull it with `-p/--platform` rather than `-a/--all-platforms`.
+
+Pull short options are `-o` (out), `-p` (platform), `-a` (all platforms), `-z` (gzip), `-S` (sign archive), `-m` (archive metadata), `-l` (label), `-b` (SBOM output), and `-B` (sign SBOM). SBOM uses `-o`, `-S`, `-l`; SBOM verification uses `-k`, `-n`. Sign/countersign use `-o`, `-l`, `-k`, and `-n` as applicable. Direct signing of a mutable repository/tag is intentionally not a primary operation; the downloaded immutable archive is the signed artifact.
 
 ## Internationalization
 
@@ -258,7 +285,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.4.2  # short: -v v1.4.2
+sugyeol update --version v1.5.0  # short: -v v1.5.0
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -270,12 +297,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.4.2
+make release VERSION=1.5.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.4.2 \
-  dist/sugyeol_1.4.2_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.4.2"
+gh release create v1.5.0 \
+  dist/sugyeol_1.5.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.5.0"
 ```
 
 ## Security boundaries

@@ -34,6 +34,8 @@ var messages = map[string]map[string]string{
   sugyeol countersign -source <file|directory> -pubkey trusted.pem source.meta
   sugyeol verify -source <file|directory> source.meta
   sugyeol image pull [-S] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image sbom [-S] -o image.spdx.json <image.tar|image.tgz>
+  sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>
   sugyeol image verify <image.tar|image.tgz> [image.meta]
   sugyeol key init --name <name> --email <email>
@@ -97,6 +99,7 @@ var messages = map[string]map[string]string{
 		"progress_inspect_image":   "Inspecting container archive",
 		"progress_resolve_image":   "Resolving image manifests",
 		"progress_pull_blobs":      "Downloading image content",
+		"progress_sbom":            "Generating SPDX SBOM",
 		"progress_release_lookup":  "Checking GitHub release",
 		"progress_checksums":       "Fetching release checksums",
 		"progress_update_download": "Downloading update",
@@ -131,6 +134,8 @@ var messages = map[string]map[string]string{
   sugyeol countersign -source <파일|디렉터리> -pubkey trusted.pem source.meta
   sugyeol verify -source <파일|디렉터리> source.meta
   sugyeol image pull [-S] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image sbom [-S] -o image.spdx.json <image.tar|image.tgz>
+  sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>
   sugyeol image verify <image.tar|image.tgz> [image.meta]
   sugyeol key init --name <이름> --email <이메일>
@@ -194,6 +199,7 @@ var messages = map[string]map[string]string{
 		"progress_inspect_image":   "컨테이너 아카이브 검사",
 		"progress_resolve_image":   "이미지 manifest 확인",
 		"progress_pull_blobs":      "이미지 내용 다운로드",
+		"progress_sbom":            "SPDX SBOM 생성",
 		"progress_release_lookup":  "GitHub 릴리스 확인",
 		"progress_checksums":       "릴리스 체크섬 확인",
 		"progress_update_download": "업데이트 다운로드",
