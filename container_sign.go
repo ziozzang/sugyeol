@@ -25,11 +25,13 @@ type containerSignatureBundle struct {
 
 func imageCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: sugyeol image <pull|sign|verify|countersign> ...")
+		return fmt.Errorf("usage: sugyeol image <pull|sbom|sign|verify|countersign> ...")
 	}
 	switch args[0] {
 	case "pull", "download", "export":
 		return imagePullCommand(args[1:])
+	case "sbom":
+		return imageSBOMCommand(args[1:])
 	case "sign":
 		return imageSignCommand(args[1:])
 	case "verify":

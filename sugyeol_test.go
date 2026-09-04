@@ -61,7 +61,7 @@ func TestProgressVerboseDebugAndCancellation(t *testing.T) {
 	if _, err := parseGlobalUIArgs([]string{"--progress=invalid", "version"}); err == nil {
 		t.Fatal("invalid progress mode was accepted")
 	}
-	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.4.2"}); got != "update" {
+	if got := effectiveCommand([]string{"--lang", "ko", "--verbose", "--progress=always", "update", "-v", "v1.5.0"}); got != "update" {
 		t.Fatalf("effective command = %q", got)
 	}
 }
@@ -849,8 +849,16 @@ func TestContainerImageSignAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subject.ArchiveFormat != "oci-image-layout" || subject.Compression != "gzip" || len(subject.RootDescriptors) != 1 {
+	if subject.ArchiveFormat != "oci-image-layout" || !subject.DockerCompatible || subject.Compression != "gzip" || len(subject.RootDescriptors) != 1 {
 		t.Fatalf("unexpected local image subject: %+v", subject)
+	}
+	wantReference := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
+	if len(subject.References) != 1 || subject.References[0] != wantReference {
+		t.Fatalf("Docker-compatible reference = %v, want %s", subject.References, wantReference)
+	}
+	annotations := subject.RootDescriptors[0].Annotations
+	if annotations["io.containerd.image.name"] != wantReference || annotations["org.opencontainers.image.ref.name"] != "latest" {
+		t.Fatalf("runtime import annotations = %v", annotations)
 	}
 	_, pub, _, err := loadSigningIdentity()
 	if err != nil {
@@ -862,6 +870,13 @@ func TestContainerImageSignAndVerify(t *testing.T) {
 	}
 	if err := imageVerifyCommand([]string{"-pubkey", pubPath, archive, meta}); err != nil {
 		t.Fatal(err)
+	}
+	metaBytes, err := os.ReadFile(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(metaBytes, []byte("docker_compatible")) {
+		t.Fatal("derived compatibility flag leaked into signed metadata")
 	}
 	f, err := os.OpenFile(archive, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -944,6 +959,106 @@ func TestDockerSaveArchiveInspection(t *testing.T) {
 	}
 	if err := imageVerifyCommand([]string{"-n", "2", "-k", pubPath, "-k", reviewerPath, archive, meta}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestImageSPDXGenerationAndSourceBinding(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "SBOM Scanner", "scanner@example.com")
+	makeLayer := func(entries map[string][]byte) []byte {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		names := make([]string, 0, len(entries))
+		for name := range entries {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			data := entries[name]
+			if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0644, Size: int64(len(data))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write(data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	layer1 := makeLayer(map[string][]byte{
+		"var/lib/dpkg/status": []byte("Package: libc6\nStatus: install ok installed\nVersion: 2.39-1\nArchitecture: amd64\n\n"),
+		"deleted.txt":         []byte("old"),
+	})
+	layer2 := makeLayer(map[string][]byte{
+		".wh.deleted.txt":      {},
+		"app/requirements.txt": []byte("requests==2.32.3\n"),
+		"etc/os-release":       []byte("ID=debian\nVERSION_ID=12\n"),
+	})
+	archive := filepath.Join(t.TempDir(), "packages.tar")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	manifest := []byte(`[{"Config":"config.json","RepoTags":["test:latest"],"Layers":["l1.tar","l2.tar"]}]`)
+	for _, entry := range []struct {
+		name string
+		data []byte
+	}{{"config.json", []byte(`{"architecture":"amd64","os":"linux"}`)}, {"l1.tar", layer1}, {"l2.tar", layer2}, {"manifest.json", manifest}} {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0644, Size: int64(len(entry.data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "packages.spdx.json")
+	if err := generateImageSBOM(archive, out, true, "security-scan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyImageSBOMBinding(archive, out); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"spdxVersion": "SPDX-2.3"`, `"name": "libc6"`, `"name": "requests"`} {
+		if !bytes.Contains(b, []byte(want)) {
+			t.Errorf("SPDX output missing %s", want)
+		}
+	}
+	if bytes.Contains(b, []byte("deleted.txt")) {
+		t.Fatal("whiteout-deleted file appeared in SBOM")
+	}
+	_, publicPEM, _, err := loadSigningIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubPath := filepath.Join(t.TempDir(), "scanner.pem")
+	if err := os.WriteFile(pubPath, publicPEM, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := imageSBOMVerifyCommand([]string{"-k", pubPath, archive, out, out + ".meta"}); err != nil {
+		t.Fatal(err)
+	}
+	archiveBytes, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archive, append(archiveBytes, 0), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyImageSBOMBinding(archive, out); err == nil {
+		t.Fatal("SBOM verified against a changed archive")
 	}
 }
 
