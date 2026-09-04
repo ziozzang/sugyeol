@@ -283,7 +283,7 @@ func sameLocalImage(signed, actual localImageSubject) bool {
 func defaultLocalImageMetaName(archivePath string) string {
 	base := archivePath
 	lower := strings.ToLower(base)
-	for _, suffix := range []string{".tar.gz", ".tgz", ".tar"} {
+	for _, suffix := range []string{".oci.tar.gz", ".oci.tgz", ".oci.tar", ".tar.gz", ".tgz", ".tar"} {
 		if strings.HasSuffix(lower, suffix) {
 			base = base[:len(base)-len(suffix)]
 			break

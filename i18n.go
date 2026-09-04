@@ -35,7 +35,7 @@ var messages = map[string]map[string]string{
   sugyeol sign -out source.meta <file|directory>
   sugyeol countersign -source <file|directory> -pubkey trusted.pem source.meta
   sugyeol verify -source <file|directory> source.meta
-  sugyeol image pull [-S] [-t imported/name:tag] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image pull [-S] [-g|-B] [-t imported/name:tag] [-o image.oci.tgz] <registry/repository:tag>
   sugyeol image sbom [-S] [-p linux/amd64|-a] -o image.spdx.json|directory <image.tar|image.tgz>
   sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>
@@ -138,7 +138,7 @@ var messages = map[string]map[string]string{
   sugyeol sign -out source.meta <파일|디렉터리>
   sugyeol countersign -source <파일|디렉터리> -pubkey trusted.pem source.meta
   sugyeol verify -source <파일|디렉터리> source.meta
-  sugyeol image pull [-S] [-t 가져올/이름:태그] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image pull [-S] [-g|-B] [-t 가져올/이름:태그] [-o image.oci.tgz] <registry/repository:tag>
   sugyeol image sbom [-S] [-p linux/amd64|-a] -o image.spdx.json|디렉터리 <image.tar|image.tgz>
   sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>

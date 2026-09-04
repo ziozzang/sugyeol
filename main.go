@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-var version = "1.6.0"
+var version = "1.6.1"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
