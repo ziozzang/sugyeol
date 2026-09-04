@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 type unpackPackage struct {
@@ -68,6 +69,12 @@ func resolveUnpackPackages(selectors []string) ([]unpackPackage, error) {
 }
 
 func resolveUnpackSelector(selector string) ([]string, error) {
+	// A directory selector intentionally restores every package found directly
+	// in that directory. In particular, `sugyeol unpack .` is a convenient way
+	// to restore all package sets in the current working directory.
+	if info, err := os.Stat(selector); err == nil && info.IsDir() {
+		return regularZIPFiles(globZIPDirectory(selector)), nil
+	}
 	if strings.ContainsAny(selector, "*?[") {
 		matches, err := filepath.Glob(selector)
 		if err != nil {
@@ -86,7 +93,76 @@ func resolveUnpackSelector(selector string) ([]string, error) {
 		}
 		matches = append(matches, found...)
 	}
-	return regularZIPFiles(matches), nil
+	matches = regularZIPFiles(matches)
+	if len(matches) > 0 {
+		return matches, nil
+	}
+
+	// Finally treat the basename as a case-insensitive fragment of a part
+	// filename. Every matching signed package set is selected.
+	dir, fragment := filepath.Split(filepath.Clean(selector))
+	if dir == "" {
+		dir = "."
+	}
+	fragment = strings.ToLower(fragment)
+	normalizedFragment := normalizePartFragment(fragment)
+	packageHint := normalizedFragment
+	if index := strings.Index(packageHint, "part"); index >= 0 {
+		packageHint = packageHint[:index]
+	}
+	var candidates []string
+	for _, path := range globZIPDirectory(dir) {
+		base := strings.ToLower(filepath.Base(path))
+		normalizedBase := normalizePartFragment(base)
+		if strings.Contains(base, fragment) || normalizedFragment != "" && strings.Contains(normalizedBase, normalizedFragment) || packageHint != "" && strings.HasPrefix(normalizedBase, packageHint+"part") {
+			candidates = append(candidates, path)
+		}
+	}
+	candidates = regularZIPFiles(candidates)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	return expandPackageSiblings(candidates), nil
+}
+
+func normalizePartFragment(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return unicode.ToLower(r)
+		}
+		return -1
+	}, value)
+}
+
+func globZIPDirectory(dir string) []string {
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.zip"))
+	return matches
+}
+
+// expandPackageSiblings turns a single matching part into the complete signed
+// package set. Unrelated or malformed ZIP files in the directory are ignored.
+func expandPackageSiblings(seeds []string) []string {
+	wanted := make(map[string]bool)
+	dirs := make(map[string]bool)
+	for _, seed := range seeds {
+		if setID, err := readPackageSetID(seed); err == nil {
+			wanted[setID] = true
+			dirs[filepath.Dir(seed)] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return seeds
+	}
+	var result []string
+	for dir := range dirs {
+		for _, path := range regularZIPFiles(globZIPDirectory(dir)) {
+			if setID, err := readPackageSetID(path); err == nil && wanted[setID] {
+				result = append(result, path)
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 func regularZIPFiles(paths []string) []string {

@@ -31,7 +31,9 @@ func makeTar(source string) (*os.File, int64, string, error) {
 	tw := tar.NewWriter(tmp)
 	rootParent := filepath.Dir(abs)
 	workDir := filepath.Dir(tmp.Name())
+	scanProgress := newProgress(tr("progress_scan_source"), 0)
 	total, err := regularFileBytes(abs, workDir)
+	scanProgress.Finish(err)
 	if err != nil {
 		return nil, 0, "", err
 	}

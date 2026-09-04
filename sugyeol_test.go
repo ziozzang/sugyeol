@@ -44,7 +44,7 @@ func TestProgressVerboseDebugAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Finish(nil)
-	if got := output.String(); !strings.Contains(got, "50%") || !strings.Contains(got, "done") {
+	if got := output.String(); !strings.Contains(got, "50%") || !strings.Contains(got, "elapsed") || !strings.Contains(got, "ETA") || !strings.Contains(got, "done") {
 		t.Fatalf("progress output is incomplete: %q", got)
 	}
 
@@ -353,6 +353,100 @@ func TestUnpackResolvesMultiplePackagePrefixes(t *testing.T) {
 	}
 	if _, err := resolveUnpackPackages([]string{"missing"}); err == nil {
 		t.Fatal("missing prefix was accepted")
+	}
+}
+
+func TestUnpackResolvesPartialPartNameAndCurrentDirectory(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Partial Signer", "partial@example.com")
+	inputDir := t.TempDir()
+	alpha := filepath.Join(inputDir, "alpha.bin")
+	beta := filepath.Join(inputDir, "beta.bin")
+	if err := os.WriteFile(alpha, bytes.Repeat([]byte("alpha"), 32*1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(beta, bytes.Repeat([]byte("beta"), 32*1024), 0600); err != nil {
+		t.Fatal(err)
+	}
+	packageDir := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(packageDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+	if err := pack(alpha, "foo", 48*1024, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack(beta, "bar", 48*1024, false); err != nil {
+		t.Fatal(err)
+	}
+
+	partial, err := resolveUnpackPackages([]string{"foo_part-000001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(partial) != 1 || len(partial[0].paths) < 2 {
+		t.Fatalf("partial selection resolved %#v", partial)
+	}
+	loose, err := resolveUnpackPackages([]string{"foo-part000000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loose) != 1 || len(loose[0].paths) != len(partial[0].paths) {
+		t.Fatalf("separator-tolerant partial selection resolved %#v", loose)
+	}
+	all, err := resolveUnpackPackages([]string{"."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("current-directory selection found %d packages", len(all))
+	}
+	common, err := resolveUnpackPackages([]string{"part-000001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(common) != 2 {
+		t.Fatalf("common partial selection found %d packages", len(common))
+	}
+}
+
+func TestUnpackOverwriteOnlyForDifferentSetsWithSameRoot(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	initTestIdentity(t, "Overwrite Signer", "overwrite@example.com")
+	firstDir, secondDir := t.TempDir(), t.TempDir()
+	first, second := filepath.Join(firstDir, "same.txt"), filepath.Join(secondDir, "same.txt")
+	if err := os.WriteFile(first, []byte("first"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("second"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	packageDir := t.TempDir()
+	firstPrefix, secondPrefix := filepath.Join(packageDir, "foo"), filepath.Join(packageDir, "bar")
+	if err := pack(first, firstPrefix, 1<<20, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := pack(second, secondPrefix, 1<<20, false); err != nil {
+		t.Fatal(err)
+	}
+	selectors := []string{firstPrefix, secondPrefix}
+	if err := unpackSelectorsWithOptions(selectors, t.TempDir(), nil, false); err == nil {
+		t.Fatal("different package sets with the same restore root did not require overwrite approval")
+	}
+	restore := t.TempDir()
+	if err := unpackSelectorsWithOptions(selectors, restore, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(restore, "same.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "second" {
+		t.Fatalf("overwritten content = %q", got)
 	}
 }
 
@@ -842,7 +936,7 @@ func TestContainerImageSignAndVerify(t *testing.T) {
 	imageRef := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
 	archive := filepath.Join(t.TempDir(), "image.oci.tgz")
 	meta := filepath.Join(t.TempDir(), "image.meta")
-	if err := imagePullCommand([]string{"-o", archive, "-z", "-S", "-m", meta, "-l", "release", imageRef}); err != nil {
+	if err := imagePullCommand([]string{"-o", archive, "-z", "-S", "-m", meta, "-l", "release", "-t", "alpine:260904", imageRef}); err != nil {
 		t.Fatal(err)
 	}
 	subject, err := inspectContainerArchive(archive)
@@ -852,12 +946,12 @@ func TestContainerImageSignAndVerify(t *testing.T) {
 	if subject.ArchiveFormat != "oci-image-layout" || !subject.DockerCompatible || subject.Compression != "gzip" || len(subject.RootDescriptors) != 1 {
 		t.Fatalf("unexpected local image subject: %+v", subject)
 	}
-	wantReference := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
+	wantReference := "alpine:260904"
 	if len(subject.References) != 1 || subject.References[0] != wantReference {
 		t.Fatalf("Docker-compatible reference = %v, want %s", subject.References, wantReference)
 	}
 	annotations := subject.RootDescriptors[0].Annotations
-	if annotations["io.containerd.image.name"] != wantReference || annotations["org.opencontainers.image.ref.name"] != "latest" {
+	if annotations["io.containerd.image.name"] != "docker.io/library/alpine:260904" || annotations["org.opencontainers.image.ref.name"] != "260904" {
 		t.Fatalf("runtime import annotations = %v", annotations)
 	}
 	_, pub, _, err := loadSigningIdentity()
@@ -992,9 +1086,13 @@ func TestImageSPDXGenerationAndSourceBinding(t *testing.T) {
 		"deleted.txt":         []byte("old"),
 	})
 	layer2 := makeLayer(map[string][]byte{
-		".wh.deleted.txt":      {},
-		"app/requirements.txt": []byte("requests==2.32.3\n"),
-		"etc/os-release":       []byte("ID=debian\nVERSION_ID=12\n"),
+		".wh.deleted.txt":                          {},
+		"app/requirements.txt":                     []byte("requests==2.32.3\n"),
+		"app/node_modules/express/package.json":    []byte(`{"name":"express","version":"4.21.2","license":"MIT"}`),
+		"opt/pyenv/versions/3.12.4/bin/python3.12": []byte("python-binary"),
+		"opt/pyenv/versions/3.12.4/lib/python3.12/site-packages/flask-3.0.3.dist-info/METADATA": []byte("Name: Flask\nVersion: 3.0.3\nLicense: BSD-3-Clause\n"),
+		"usr/local/include/node/node_version.h":                                                 []byte("#define NODE_MAJOR_VERSION 22\n#define NODE_MINOR_VERSION 14\n#define NODE_PATCH_VERSION 0\n"),
+		"etc/os-release":                                                                        []byte("ID=debian\nVERSION_ID=12\n"),
 	})
 	archive := filepath.Join(t.TempDir(), "packages.tar")
 	f, err := os.Create(archive)
@@ -1031,7 +1129,7 @@ func TestImageSPDXGenerationAndSourceBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"spdxVersion": "SPDX-2.3"`, `"name": "libc6"`, `"name": "requests"`} {
+	for _, want := range []string{`"spdxVersion": "SPDX-2.3"`, `"name": "libc6"`, `"name": "requests"`, `"name": "express"`, `"name": "Flask"`, `"name": "python"`, `"name": "node"`} {
 		if !bytes.Contains(b, []byte(want)) {
 			t.Errorf("SPDX output missing %s", want)
 		}
@@ -1062,6 +1160,107 @@ func TestImageSPDXGenerationAndSourceBinding(t *testing.T) {
 	}
 }
 
+func TestSBOMLanguageAndRuntimeCatalogers(t *testing.T) {
+	files := []sbomFile{
+		{Path: "app/node_modules/@scope/tool/package.json", Data: []byte(`{"name":"@scope/tool","version":"2.1.0","license":"MIT"}`)},
+		{Path: "app/Pipfile.lock", Data: []byte(`{"default":{"django":{"version":"==5.1.1"}}}`)},
+		{Path: "app/poetry.lock", Data: []byte("[[package]]\nname = \"httpx\"\nversion = \"0.27.2\"\n")},
+		{Path: "app/composer.lock", Data: []byte(`{"packages":[{"name":"symfony/console","version":"v7.1.0","license":["MIT"]}]}`)},
+		{Path: "app/Gemfile.lock", Data: []byte("GEM\n  specs:\n    rack (3.1.0)\n")},
+		{Path: "app/project.assets.json", Data: []byte(`{"libraries":{"Newtonsoft.Json/13.0.3":{}}}`)},
+		{Path: "app/Package.resolved", Data: []byte(`{"pins":[{"identity":"swift-log","state":{"version":"1.6.1"}}]}`)},
+		{Path: "app/pubspec.lock", Data: []byte("packages:\n  collection:\n    dependency: transitive\n    version: \"1.19.0\"\n")},
+		{Path: "opt/conda/conda-meta/numpy.json", Data: []byte(`{"name":"numpy","version":"2.1.0","license":"BSD-3-Clause"}`)},
+	}
+	packages, _, _, warnings := catalogSBOMPackages(files)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected catalog warnings: %v", warnings)
+	}
+	got := map[string]string{}
+	for _, p := range packages {
+		got[p.Name] = p.Version
+	}
+	for name, version := range map[string]string{"@scope/tool": "2.1.0", "django": "5.1.1", "httpx": "0.27.2", "symfony/console": "v7.1.0", "rack": "3.1.0", "Newtonsoft.Json": "13.0.3", "swift-log": "1.6.1", "collection": "1.19.0", "numpy": "2.1.0"} {
+		if got[name] != version {
+			t.Errorf("package %s = %q, want %q (all: %#v)", name, got[name], version, got)
+		}
+	}
+}
+
+func TestGenerateMultiPlatformSBOMs(t *testing.T) {
+	makeTestLayer := func(entries map[string][]byte) []byte {
+		var buf bytes.Buffer
+		tw := tar.NewWriter(&buf)
+		for name, data := range entries {
+			if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0644, Size: int64(len(data))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write(data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	amdLayer := makeTestLayer(map[string][]byte{"etc/os-release": []byte("ID=alpine\nVERSION_ID=3.20\n"), "amd64.txt": []byte("amd64")})
+	armLayer := makeTestLayer(map[string][]byte{"etc/os-release": []byte("ID=alpine\nVERSION_ID=3.20\n"), "arm64.txt": []byte("arm64")})
+	archive := filepath.Join(t.TempDir(), "multi.tar")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	manifest := []byte(`[{"Config":"amd.json","RepoTags":["multi:latest"],"Layers":["amd.tar"]},{"Config":"arm.json","RepoTags":["multi:latest"],"Layers":["arm.tar"]}]`)
+	entries := []struct {
+		name string
+		data []byte
+	}{
+		{"amd.json", []byte(`{"architecture":"amd64","os":"linux"}`)},
+		{"arm.json", []byte(`{"architecture":"arm64","os":"linux","variant":"v8"}`)},
+		{"amd.tar", amdLayer}, {"arm.tar", armLayer}, {"manifest.json", manifest},
+	}
+	for _, entry := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0644, Size: int64(len(entry.data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "sboms")
+	if err := generateImageSBOMs(archive, out, false, "sbom", "linux/amd64", true); err != nil {
+		t.Fatal(err)
+	}
+	for file, marker := range map[string]string{"linux-amd64.spdx.json": "amd64.txt", "linux-arm64-v8.spdx.json": "arm64.txt"} {
+		b, err := os.ReadFile(filepath.Join(out, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(b, []byte(marker)) || !bytes.Contains(b, []byte(`platform: linux/`)) {
+			t.Fatalf("%s lacks platform-specific content", file)
+		}
+	}
+}
+
+func TestImageLayerMediaTypesExcludeAttestations(t *testing.T) {
+	image := ociManifest{Layers: []ociDescriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip"}}}
+	if !hasOnlyImageLayers(image) {
+		t.Fatal("OCI gzip image layer was rejected")
+	}
+	attestation := ociManifest{Layers: []ociDescriptor{{MediaType: "application/vnd.in-toto+json"}}}
+	if hasOnlyImageLayers(attestation) {
+		t.Fatal("in-toto attestation was accepted as a runnable image layer")
+	}
+}
+
 func TestParseImageReference(t *testing.T) {
 	ref, err := parseImageReference("ubuntu:24.04")
 	if err != nil {
@@ -1072,6 +1271,15 @@ func TestParseImageReference(t *testing.T) {
 	}
 	if _, err := parseImageReference("example.com/team/app@sha256:bad"); err == nil {
 		t.Fatal("invalid digest accepted")
+	}
+	source, _ := parseImageReference("example.com/team/app:latest")
+	rewritten, err := parseArchiveImageReference("260904", source)
+	if err != nil || rewritten.Repository != "team/app" || rewritten.Identifier != "260904" {
+		t.Fatalf("bare archive tag rewrite = %+v, %v", rewritten, err)
+	}
+	rewritten, err = parseArchiveImageReference("alpine:260904", source)
+	if err != nil || rewritten.Repository != "library/alpine" || rewritten.Identifier != "260904" {
+		t.Fatalf("named archive tag rewrite = %+v, %v", rewritten, err)
 	}
 }
 

@@ -10,31 +10,33 @@ var currentLanguage = detectLanguage()
 
 var messages = map[string]map[string]string{
 	"en": {
-		"command_required":     "a command is required",
-		"unknown_command":      "unknown command %q",
-		"pack_usage":           "usage: sugyeol pack -size 10MiB -out backup <file|directory>",
-		"verify_files":         "specify .zip parts to verify",
-		"unpack_files":         "specify package prefixes, ZIP parts, or glob patterns to restore",
-		"unpack_no_match":      "no package parts match %q",
-		"unpack_root_conflict": "multiple packages restore the same root name %q",
-		"size_help":            "maximum part size (unitless values are MB; e.g. 10, 10MiB, 1GB)",
-		"parts_help":           "split into exactly this many non-empty parts (mutually exclusive with size)",
-		"out_help":             "output filename prefix",
-		"scramble_help":        "enable reversible payload scrambling",
-		"compression_help":     "ZIP compression: none, fastest, default, highest, or 0..9",
-		"restore_help":         "restore destination directory",
+		"command_required":             "a command is required",
+		"unknown_command":              "unknown command %q",
+		"pack_usage":                   "usage: sugyeol pack -size 10MiB -out backup <file|directory>",
+		"verify_files":                 "specify .zip parts to verify",
+		"unpack_files":                 "specify package prefixes, partial ZIP names, glob patterns, or directories to restore",
+		"unpack_no_match":              "no package parts match %q",
+		"unpack_overwrite_prompt":      "matched packages restore the same root(s): %s; overwrite with the later package? [y/N] ",
+		"unpack_overwrite_declined":    "restore canceled because overwrite was not approved",
+		"unpack_overwrite_nonterminal": "matched packages restore the same root(s): %s; use --overwrite (-y) in non-interactive mode",
+		"size_help":                    "maximum part size (unitless values are MB; e.g. 10, 10MiB, 1GB)",
+		"parts_help":                   "split into exactly this many non-empty parts (mutually exclusive with size)",
+		"out_help":                     "output filename prefix",
+		"scramble_help":                "enable reversible payload scrambling",
+		"compression_help":             "ZIP compression: none, fastest, default, highest, or 0..9",
+		"restore_help":                 "restore destination directory",
 		"usage": `sugyeol - signed split ZIP creator/verifier/restorer
 
   Global UI: sugyeol [--lang en|ko] [--verbose|-v] [--debug] [--progress auto|always|never] <command>
 
   sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <file|directory>
   sugyeol verify backup_part-*.zip
-  sugyeol unpack [-out <directory>] <prefix|part.zip|glob> [more prefixes...]
+  sugyeol unpack [-o <directory>] [-y] <prefix|partial-part|part.zip|glob|directory> [more...]
   sugyeol sign -out source.meta <file|directory>
   sugyeol countersign -source <file|directory> -pubkey trusted.pem source.meta
   sugyeol verify -source <file|directory> source.meta
-  sugyeol image pull [-S] -o image.oci.tgz <registry/repository:tag>
-  sugyeol image sbom [-S] -o image.spdx.json <image.tar|image.tgz>
+  sugyeol image pull [-S] [-t imported/name:tag] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image sbom [-S] [-p linux/amd64|-a] -o image.spdx.json|directory <image.tar|image.tgz>
   sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>
   sugyeol image verify <image.tar|image.tgz> [image.meta]
@@ -89,6 +91,7 @@ var messages = map[string]map[string]string{
 		"package_part_detail":      "  part %d/%d: signed_at=%s salt=%s payload_sha256=%s stored_sha256=%s\n",
 		"canceled":                 "sugyeol: canceled by user",
 		"progress_tar":             "Creating source TAR",
+		"progress_scan_source":     "Scanning source files",
 		"progress_pack":            "Processing package payload",
 		"progress_write_part":      "Writing ZIP part %d/%d",
 		"progress_compress_part":   "Compressing ZIP part %d/%d",
@@ -110,31 +113,33 @@ var messages = map[string]map[string]string{
 		"progress_working":         "%s: working (%s)\n",
 	},
 	"ko": {
-		"command_required":     "명령이 필요합니다",
-		"unknown_command":      "알 수 없는 명령 %q",
-		"pack_usage":           "사용법: sugyeol pack -size 10MiB -out backup <파일|디렉터리>",
-		"verify_files":         "검사할 .zip 파트를 지정하세요",
-		"unpack_files":         "복구할 패키지 접두사, ZIP 파트 또는 glob 패턴을 지정하세요",
-		"unpack_no_match":      "%q에 일치하는 패키지 파트가 없습니다",
-		"unpack_root_conflict": "여러 패키지가 같은 루트 이름 %q을(를) 복구합니다",
-		"size_help":            "파트의 최대 크기 (단위 생략 시 MB; 예: 10, 10MiB, 1GB)",
-		"parts_help":           "비어 있지 않은 파트를 정확히 이 개수로 생성 (size와 동시 사용 불가)",
-		"out_help":             "출력 파일 접두사",
-		"scramble_help":        "가역 payload 스크램블링 사용",
-		"compression_help":     "ZIP 압축: none, fastest, default, highest 또는 0..9",
-		"restore_help":         "복구 대상 디렉터리",
+		"command_required":             "명령이 필요합니다",
+		"unknown_command":              "알 수 없는 명령 %q",
+		"pack_usage":                   "사용법: sugyeol pack -size 10MiB -out backup <파일|디렉터리>",
+		"verify_files":                 "검사할 .zip 파트를 지정하세요",
+		"unpack_files":                 "복구할 패키지 접두사, ZIP 파일명 일부, glob 패턴 또는 디렉터리를 지정하세요",
+		"unpack_no_match":              "%q에 일치하는 패키지 파트가 없습니다",
+		"unpack_overwrite_prompt":      "매칭된 패키지의 복구 루트가 겹칩니다: %s; 뒤 패키지로 덮어쓸까요? [y/N] ",
+		"unpack_overwrite_declined":    "덮어쓰기가 승인되지 않아 복구를 취소했습니다",
+		"unpack_overwrite_nonterminal": "매칭된 패키지의 복구 루트가 겹칩니다: %s; 비대화형 실행에서는 --overwrite (-y)를 사용하세요",
+		"size_help":                    "파트의 최대 크기 (단위 생략 시 MB; 예: 10, 10MiB, 1GB)",
+		"parts_help":                   "비어 있지 않은 파트를 정확히 이 개수로 생성 (size와 동시 사용 불가)",
+		"out_help":                     "출력 파일 접두사",
+		"scramble_help":                "가역 payload 스크램블링 사용",
+		"compression_help":             "ZIP 압축: none, fastest, default, highest 또는 0..9",
+		"restore_help":                 "복구 대상 디렉터리",
 		"usage": `sugyeol - 서명된 분할 ZIP 생성/검사/복구
 
   전역 UI: sugyeol [--lang en|ko] [--verbose|-v] [--debug] [--progress auto|always|never] <명령>
 
   sugyeol [--lang en|ko] pack [-s 10MiB|-n 7] [-x=true|-e] [-c none|fastest|default|highest|0..9] -o backup <파일|디렉터리>
   sugyeol verify backup_part-*.zip
-  sugyeol unpack [-out <디렉터리>] <접두사|파트.zip|glob> [추가 접두사...]
+  sugyeol unpack [-o <디렉터리>] [-y] <접두사|파트명-일부|파트.zip|glob|디렉터리> [추가...]
   sugyeol sign -out source.meta <파일|디렉터리>
   sugyeol countersign -source <파일|디렉터리> -pubkey trusted.pem source.meta
   sugyeol verify -source <파일|디렉터리> source.meta
-  sugyeol image pull [-S] -o image.oci.tgz <registry/repository:tag>
-  sugyeol image sbom [-S] -o image.spdx.json <image.tar|image.tgz>
+  sugyeol image pull [-S] [-t 가져올/이름:태그] -o image.oci.tgz <registry/repository:tag>
+  sugyeol image sbom [-S] [-p linux/amd64|-a] -o image.spdx.json|디렉터리 <image.tar|image.tgz>
   sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>
   sugyeol image verify <image.tar|image.tgz> [image.meta]
@@ -189,6 +194,7 @@ var messages = map[string]map[string]string{
 		"package_part_detail":      "  파트 %d/%d: signed_at=%s salt=%s payload_sha256=%s stored_sha256=%s\n",
 		"canceled":                 "sugyeol: 사용자 요청으로 취소했습니다",
 		"progress_tar":             "원본 TAR 생성",
+		"progress_scan_source":     "원본 파일 탐색",
 		"progress_pack":            "패키지 payload 처리",
 		"progress_write_part":      "ZIP 파트 %d/%d 기록",
 		"progress_compress_part":   "ZIP 파트 %d/%d 압축",

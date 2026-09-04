@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strings"
+
+	"golang.org/x/term"
 )
 
 func unpack(paths []string, out string) error {
@@ -20,23 +26,37 @@ func unpackWithPassword(paths []string, out string, password []byte) (resultErr 
 }
 
 func unpackSelectorsWithPassword(selectors []string, out string, password []byte) error {
+	return unpackSelectorsWithOptions(selectors, out, password, false)
+}
+
+func unpackSelectorsWithOptions(selectors []string, out string, password []byte, overwrite bool) error {
 	packages, err := resolveUnpackPackages(selectors)
 	if err != nil {
 		return err
 	}
 	verified := make([][]verifiedPart, 0, len(packages))
-	roots := make(map[string]bool)
+	roots := make(map[string]int)
+	var conflicts []string
 	for _, pkg := range packages {
 		parts, err := verifyParts(pkg.paths, false)
 		if err != nil {
 			return err
 		}
 		root := parts[0].m.SourceName
-		if roots[root] {
-			return fmt.Errorf(tr("unpack_root_conflict"), root)
+		roots[root]++
+		if roots[root] == 2 {
+			conflicts = append(conflicts, root)
 		}
-		roots[root] = true
 		verified = append(verified, parts)
+	}
+	if len(conflicts) > 0 && !overwrite {
+		ok, err := confirmUnpackOverwrite(conflicts)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New(tr("unpack_overwrite_declined"))
+		}
 	}
 	for _, parts := range verified {
 		if err := unpackVerifiedParts(parts, out, password); err != nil {
@@ -44,6 +64,23 @@ func unpackSelectorsWithPassword(selectors []string, out string, password []byte
 		}
 	}
 	return nil
+}
+
+func confirmUnpackOverwrite(roots []string) (bool, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false, fmt.Errorf(tr("unpack_overwrite_nonterminal"), strings.Join(roots, ", "))
+	}
+	fmt.Fprintf(uiOutput, tr("unpack_overwrite_prompt"), strings.Join(roots, ", "))
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes", "예", "네":
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func unpackVerifiedParts(parts []verifiedPart, out string, password []byte) (resultErr error) {

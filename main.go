@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-var version = "1.5.0"
+var version = "1.6.0"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -184,9 +184,11 @@ func run(args []string) error {
 		out := fs.String("out", ".", tr("restore_help"))
 		passwordFile := fs.String("password-file", "", "read decryption password from a 0600 file")
 		passwordText := fs.String("password", "", "decryption password (may be exposed in process listings and shell history)")
+		overwrite := fs.Bool("overwrite", false, "allow later matched packages to overwrite conflicting restored paths")
 		fs.StringVar(out, "o", ".", tr("restore_help"))
 		fs.StringVar(passwordFile, "p", "", "read decryption password from a 0600 file")
 		fs.StringVar(passwordText, "P", "", "decryption password (may be exposed in process listings and shell history)")
+		fs.BoolVar(overwrite, "y", false, "allow later matched packages to overwrite conflicting restored paths")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -218,7 +220,7 @@ func run(args []string) error {
 		if len(password) > 0 {
 			defer clearBytes(password)
 		}
-		return unpackSelectorsWithPassword(fs.Args(), *out, password)
+		return unpackSelectorsWithOptions(fs.Args(), *out, password, *overwrite)
 	case "version", "--version", "-version":
 		fmt.Println("sugyeol", version)
 		return nil
