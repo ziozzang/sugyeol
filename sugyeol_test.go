@@ -66,6 +66,19 @@ func TestProgressVerboseDebugAndCancellation(t *testing.T) {
 	}
 }
 
+func TestDefaultAboutIncludesProjectAndAuthor(t *testing.T) {
+	original := currentLanguage
+	defer func() { currentLanguage = original }()
+	setLanguage("en")
+	var output bytes.Buffer
+	printAbout(&output)
+	for _, want := range []string{"Sugyeol " + version, "Jioh Jung <jioh@jung.net>", "https://github.com/ziozzang/sugyeol", "MIT"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("about output missing %q: %q", want, output.String())
+		}
+	}
+}
+
 func TestParseSizeDefaultIsMB(t *testing.T) {
 	got, err := parseSize("10")
 	if err != nil || got != 10_000_000 {

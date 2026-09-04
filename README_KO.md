@@ -24,11 +24,13 @@
 
 ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
-현재 릴리스는 **v1.6.1**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
+현재 릴리스는 **v1.6.2**입니다. 작성자: **Jioh Jung <jioh@jung.net>**. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>, 라이선스: MIT.
+
+인자 없이 `sugyeol`을 실행하면 현재 언어의 프로젝트 정보를 출력합니다. `sugyeol about` 명령으로도 같은 내용을 볼 수 있으며 `info` 별칭을 지원합니다.
 
 ## 빌드와 설치
 
-빌드에는 Go 1.25 이상이 필요합니다. 릴리스는 `CGO_ENABLED=0`, `netgo`, `osusergo`로 정적 빌드합니다.
+빌드에는 Go 1.27.1 이상이 필요합니다. 릴리스는 `CGO_ENABLED=0`, `netgo`, `osusergo`로 정적 빌드합니다.
 
 ```sh
 make build
@@ -36,7 +38,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.6.1`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+`make release VERSION=1.6.2`는 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
 
 ## 진행률·상세 출력·디버그·취소
 
@@ -304,7 +306,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check          # 단축: -c
 sugyeol update --force          # 단축: -f
-sugyeol update --version v1.6.1 # 단축: -v v1.6.1
+sugyeol update --version v1.6.2 # 단축: -v v1.6.2
 ```
 
 현재 플랫폼용 GitHub Release 자산을 받고 `SHA256SUMS`를 확인한 뒤 실행 파일을 원자 교체합니다. 대화형 실행은 최대 24시간에 한 번 실패 허용 방식으로 새 버전 알림만 확인하며 실제 교체에는 항상 `sugyeol update`가 필요합니다. `SUGYEOL_NO_UPDATE_CHECK=1`로 알림 확인을 끌 수 있습니다.
@@ -316,12 +318,12 @@ GitHub Actions는 의도적으로 비활성화했습니다. 직접 빌드·테�
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.6.1
+make release VERSION=1.6.2
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.6.1 \
-  dist/sugyeol_1.6.1_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.1"
+gh release create v1.6.2 \
+  dist/sugyeol_1.6.2_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.2"
 ```
 
 ## 보안 경계

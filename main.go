@@ -5,13 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 )
 
-var version = "1.6.1"
+var version = "1.6.2"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -51,8 +52,8 @@ func run(args []string) error {
 		}
 	}
 	if len(args) == 0 {
-		usage()
-		return errors.New(tr("command_required"))
+		printAbout(os.Stdout)
+		return nil
 	}
 	uiDebugf("version=%s command=%s progress=%s", version, args[0], ui.mode.String())
 	switch args[0] {
@@ -224,6 +225,12 @@ func run(args []string) error {
 	case "version", "--version", "-version":
 		fmt.Println("sugyeol", version)
 		return nil
+	case "about", "info":
+		if len(args) != 1 {
+			return errors.New("about does not accept arguments")
+		}
+		printAbout(os.Stdout)
+		return nil
 	case "update", "self-update":
 		return updateCommand(args[1:])
 	case "help", "-h", "--help":
@@ -255,4 +262,8 @@ func packPartsFlagSpecified(args []string) bool {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, tr("usage"))
+}
+
+func printAbout(w io.Writer) {
+	fmt.Fprintf(w, tr("about"), version)
 }

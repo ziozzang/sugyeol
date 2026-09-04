@@ -10,6 +10,12 @@ var currentLanguage = detectLanguage()
 
 var messages = map[string]map[string]string{
 	"en": {
+		"about": `Sugyeol %s
+Signed packaging, cumulative signatures, container archives, and SPDX SBOMs.
+Author:  Jioh Jung <jioh@jung.net>
+GitHub:  https://github.com/ziozzang/sugyeol
+License: MIT
+`,
 		"command_required":             "a command is required",
 		"unknown_command":              "unknown command %q",
 		"pack_usage":                   "usage: sugyeol pack -size 10MiB -out backup <file|directory>",
@@ -40,6 +46,7 @@ var messages = map[string]map[string]string{
   sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>
   sugyeol image verify <image.tar|image.tgz> [image.meta]
+  sugyeol about
   sugyeol key init --name <name> --email <email>
   sugyeol key [-out public_key.pem]
   sugyeol update [--check]`,
@@ -113,6 +120,12 @@ var messages = map[string]map[string]string{
 		"progress_working":         "%s: working (%s)\n",
 	},
 	"ko": {
+		"about": `수결(Sugyeol) %s
+서명 패키징, 누적 서명, 컨테이너 아카이브와 SPDX SBOM 도구입니다.
+작성자:  Jioh Jung <jioh@jung.net>
+GitHub:  https://github.com/ziozzang/sugyeol
+라이선스: MIT
+`,
 		"command_required":             "명령이 필요합니다",
 		"unknown_command":              "알 수 없는 명령 %q",
 		"pack_usage":                   "사용법: sugyeol pack -size 10MiB -out backup <파일|디렉터리>",
@@ -143,6 +156,7 @@ var messages = map[string]map[string]string{
   sugyeol image sbom verify <image.tar|image.tgz> <image.spdx.json> [image.spdx.json.meta]
   sugyeol image sign <image.tar|image.tgz>
   sugyeol image verify <image.tar|image.tgz> [image.meta]
+  sugyeol about
   sugyeol key init --name <이름> --email <이메일>
   sugyeol key [-out public_key.pem]
   sugyeol update [--check]`,
