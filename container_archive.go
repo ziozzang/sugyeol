@@ -27,6 +27,23 @@ const (
 	maxContainerMetadata    int64 = 16 << 20
 )
 
+func isImageLayerMediaType(mediaType string) bool {
+	return strings.HasPrefix(mediaType, "application/vnd.oci.image.layer.") && strings.Contains(mediaType, ".tar") ||
+		strings.HasPrefix(mediaType, "application/vnd.docker.image.rootfs.") && strings.Contains(mediaType, ".tar")
+}
+
+func hasOnlyImageLayers(manifest ociManifest) bool {
+	if len(manifest.Layers) == 0 {
+		return false
+	}
+	for _, layer := range manifest.Layers {
+		if !isImageLayerMediaType(layer.MediaType) {
+			return false
+		}
+	}
+	return true
+}
+
 type ociPlatform struct {
 	Architecture string `json:"architecture,omitempty"`
 	OS           string `json:"os,omitempty"`

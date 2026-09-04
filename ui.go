@@ -141,7 +141,28 @@ func newProgress(label string, total int64) *progressBar {
 	} else {
 		fmt.Fprintf(uiOutput, "[sugyeol] %s...\n", label)
 	}
+	if total <= 0 && (p.terminal || ui.mode == progressAlways) {
+		go p.animateUnknown()
+	}
 	return p
+}
+
+func (p *progressBar) animateUnknown() {
+	interval := 200 * time.Millisecond
+	if !p.terminal {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for now := range ticker.C {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return
+		}
+		p.renderLocked(false, now)
+		p.mu.Unlock()
+	}
 }
 
 func (p *progressBar) Write(b []byte) (int, error) {
@@ -177,6 +198,19 @@ func (p *progressBar) Add(n int64) {
 			p.renderLocked(false, now)
 		}
 	}
+}
+
+func (p *progressBar) SetTotal(total int64) {
+	if p == nil || total <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	p.total = total
+	p.renderLocked(false, time.Now())
 }
 
 func (p *progressBar) Finish(err error) {
@@ -232,13 +266,20 @@ func (p *progressBar) renderLocked(_ bool, now time.Time) {
 		rate = float64(p.current) / elapsed
 	}
 	eta := "--"
+	elapsedText := now.Sub(p.started).Round(time.Second).String()
 	if rate > 0 && p.total > p.current {
 		eta = time.Duration(float64(p.total-p.current) / rate * float64(time.Second)).Round(time.Second).String()
 	} else if p.total > 0 && p.current >= p.total {
 		eta = "0s"
 	}
 	if p.terminal && p.total <= 0 {
-		fmt.Fprintf(uiOutput, "\r\033[2K%s... %s", p.label, now.Sub(p.started).Round(time.Second))
+		width := 24
+		position := int(now.Sub(p.started)/(200*time.Millisecond)) % (2*width - 2)
+		if position >= width {
+			position = 2*width - 2 - position
+		}
+		bar := strings.Repeat(" ", position) + ">" + strings.Repeat(" ", width-position-1)
+		fmt.Fprintf(uiOutput, "\r\033[2K%s [%s] working elapsed %s", p.label, bar, elapsedText)
 		return
 	}
 	if p.terminal {
@@ -248,14 +289,14 @@ func (p *progressBar) renderLocked(_ bool, now time.Time) {
 			filled = width
 		}
 		bar := strings.Repeat("=", filled) + strings.Repeat(" ", width-filled)
-		line := fmt.Sprintf("\r\033[2K%s [%s] %3d%% %s/%s %s/s ETA %s", p.label, bar, percent, humanSize(p.current), humanSize(p.total), humanSize(int64(rate)), eta)
+		line := fmt.Sprintf("\r\033[2K%s [%s] %3d%% %s/%s %s/s elapsed %s ETA %s", p.label, bar, percent, humanSize(p.current), humanSize(p.total), humanSize(int64(rate)), elapsedText, eta)
 		fmt.Fprint(uiOutput, line)
 		return
 	}
 	if ui.mode == progressAlways && p.total <= 0 {
 		fmt.Fprint(uiOutput, "[sugyeol] "+tr("progress_working", p.label, now.Sub(p.started).Round(time.Second)))
 	} else if ui.mode == progressAlways {
-		fmt.Fprintf(uiOutput, "[sugyeol] %s: %3d%% %s/%s %s/s ETA %s\n", p.label, percent, humanSize(p.current), humanSize(p.total), humanSize(int64(rate)), eta)
+		fmt.Fprintf(uiOutput, "[sugyeol] %s: %3d%% %s/%s %s/s elapsed %s ETA %s\n", p.label, percent, humanSize(p.current), humanSize(p.total), humanSize(int64(rate)), elapsedText, eta)
 	}
 }
 

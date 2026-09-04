@@ -31,6 +31,7 @@ type registryPuller struct {
 	blobs         map[string]pulledBlob
 	allPlatforms  bool
 	platform      ociPlatform
+	archiveRef    parsedImageReference
 }
 
 func imagePullCommand(args []string) error {
@@ -44,6 +45,7 @@ func imagePullCommand(args []string) error {
 	label := fs.String("label", "", "optional signed role/purpose label")
 	sbomOut := fs.String("sbom", "", "generate an SPDX 2.3 SBOM at this path")
 	signSBOM := fs.Bool("sign-sbom", false, "sign the generated SBOM (requires sbom)")
+	archiveTag := fs.String("tag", "", "override the imported image name/tag (for example alpine:260904)")
 	fs.StringVar(out, "o", "", "output OCI image-layout .tar or .tgz")
 	fs.StringVar(platform, "p", runtime.GOOS+"/"+runtime.GOARCH, "platform os/arch[/variant]")
 	fs.BoolVar(allPlatforms, "a", false, "download every platform from an image index")
@@ -53,6 +55,7 @@ func imagePullCommand(args []string) error {
 	fs.StringVar(label, "l", "", "optional signed role/purpose label")
 	fs.StringVar(sbomOut, "b", "", "generate an SPDX 2.3 SBOM at this path")
 	fs.BoolVar(signSBOM, "B", false, "sign the generated SBOM (requires sbom)")
+	fs.StringVar(archiveTag, "t", "", "override the imported image name/tag (for example alpine:260904)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -73,6 +76,10 @@ func imagePullCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	archiveRef, err := parseArchiveImageReference(*archiveTag, ref)
+	if err != nil {
+		return err
+	}
 	if *out == "" {
 		base := filepath.Base(ref.Repository) + "-" + strings.NewReplacer(":", "-", "@", "-").Replace(ref.Identifier)
 		if *gzipOutput {
@@ -84,10 +91,10 @@ func imagePullCommand(args []string) error {
 	if strings.HasSuffix(strings.ToLower(*out), ".tgz") || strings.HasSuffix(strings.ToLower(*out), ".tar.gz") {
 		*gzipOutput = true
 	}
-	uiDebugf("image pull reference=%q output=%q platform=%q all_platforms=%t gzip=%t sign=%t sbom=%q sign_sbom=%t", fs.Arg(0), *out, *platform, *allPlatforms, *gzipOutput, *signAfterPull, *sbomOut, *signSBOM)
+	uiDebugf("image pull reference=%q archive_tag=%q output=%q platform=%q all_platforms=%t gzip=%t sign=%t sbom=%q sign_sbom=%t", fs.Arg(0), *archiveTag, *out, *platform, *allPlatforms, *gzipOutput, *signAfterPull, *sbomOut, *signSBOM)
 	ctx, cancel := context.WithTimeout(commandContext, 24*time.Hour)
 	defer cancel()
-	puller := &registryPuller{ref: ref, client: &http.Client{Timeout: 0}, blobs: make(map[string]pulledBlob), allPlatforms: *allPlatforms, platform: wanted}
+	puller := &registryPuller{ref: ref, archiveRef: archiveRef, client: &http.Client{Timeout: 0}, blobs: make(map[string]pulledBlob), allPlatforms: *allPlatforms, platform: wanted}
 	resolveProgress := newProgress(tr("progress_resolve_image"), 0)
 	roots, err := puller.collectImage(ctx)
 	resolveProgress.Finish(err)
@@ -101,7 +108,8 @@ func imagePullCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("verify downloaded image archive: %w", err)
 	}
-	fmt.Printf("container image downloaded: %s\narchive: %s\nformat: %s\ndocker load compatible: %t\nsha256: %s\n", fs.Arg(0), *out, subject.ArchiveFormat, subject.DockerCompatible, subject.ArchiveSHA256)
+	_, importReference, _, _ := puller.dockerNames()
+	fmt.Printf("container image downloaded: %s\nimport reference: %s\narchive: %s\nformat: %s\ndocker load compatible: %t\nsha256: %s\n", fs.Arg(0), importReference, *out, subject.ArchiveFormat, subject.DockerCompatible, subject.ArchiveSHA256)
 	if *signAfterPull {
 		signArgs := make([]string, 0, 5)
 		if *metaOut != "" {
@@ -116,10 +124,7 @@ func imagePullCommand(args []string) error {
 		}
 	}
 	if *sbomOut != "" {
-		if *allPlatforms {
-			return fmt.Errorf("SBOM generation currently requires one platform; use --platform without --all-platforms")
-		}
-		return generateImageSBOM(*out, *sbomOut, *signSBOM, "sbom")
+		return generateImageSBOMs(*out, *sbomOut, *signSBOM, "sbom", *platform, *allPlatforms)
 	}
 	return nil
 }
@@ -454,23 +459,52 @@ func (p *registryPuller) writeArchive(ctx context.Context, output string, roots 
 }
 
 func (p *registryPuller) dockerNames() (dockerTag, canonicalName, refName string, hasTag bool) {
-	host := p.ref.Registry
+	ref := p.archiveRef
+	if ref.Registry == "" {
+		ref = p.ref
+	}
+	host := ref.Registry
 	if host == "registry-1.docker.io" {
 		host = "docker.io"
 	}
-	canonicalName = host + "/" + p.ref.Repository
-	if strings.HasPrefix(p.ref.Identifier, "sha256:") {
-		return "", canonicalName + "@" + p.ref.Identifier, "", false
+	canonicalName = host + "/" + ref.Repository
+	if strings.HasPrefix(ref.Identifier, "sha256:") {
+		return "", canonicalName + "@" + ref.Identifier, "", false
 	}
-	refName = p.ref.Identifier
+	refName = ref.Identifier
 	canonicalName += ":" + refName
-	repository := p.ref.Repository
+	repository := ref.Repository
 	if host == "docker.io" {
 		repository = strings.TrimPrefix(repository, "library/")
 	} else {
 		repository = host + "/" + repository
 	}
 	return repository + ":" + refName, canonicalName, refName, true
+}
+
+func parseArchiveImageReference(value string, source parsedImageReference) (parsedImageReference, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return source, nil
+	}
+	// A bare value is a replacement tag on the source repository. A name:tag
+	// or registry/name:tag value replaces both repository and tag.
+	if !strings.ContainsAny(value, "/:@") {
+		if !tagPattern.MatchString(value) {
+			return parsedImageReference{}, fmt.Errorf("invalid archive image tag %q", value)
+		}
+		source.Identifier = value
+		source.Original = value
+		return source, nil
+	}
+	ref, err := parseImageReference(value)
+	if err != nil {
+		return parsedImageReference{}, fmt.Errorf("invalid archive image tag: %w", err)
+	}
+	if strings.HasPrefix(ref.Identifier, "sha256:") {
+		return parsedImageReference{}, fmt.Errorf("archive image tag must name a tag, not a digest")
+	}
+	return ref, nil
 }
 
 func (p *registryPuller) buildDockerCompatibilityManifest(roots []ociDescriptor, dockerTag string) ([]byte, error) {
@@ -506,6 +540,9 @@ func (p *registryPuller) buildDockerCompatibilityManifest(roots []ociDescriptor,
 			// those in the OCI graph, but do not advertise them as loadable images
 			// in Docker's compatibility manifest.
 			if manifest.Config.MediaType != ociConfigMediaType && manifest.Config.MediaType != dockerConfigMediaType {
+				return nil
+			}
+			if !hasOnlyImageLayers(manifest) {
 				return nil
 			}
 			item := dockerArchiveManifestItem{Config: containerBlobPath(manifest.Config.Digest), Layers: make([]string, 0, len(manifest.Layers))}

@@ -24,7 +24,7 @@ registry image ─────── native pull ──> OCI tar/tgz ──> run
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.5.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+Current release: **v1.6.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## Build and install
 
@@ -36,11 +36,11 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.5.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.6.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
 ## Progress, verbose output, debug output, and cancellation
 
-Long-running work reports progress on `stderr`, while command results remain on their existing output stream. Interactive terminals get an updating bar with percentage, processed bytes, average `KiB/s`/`MiB/s`/`GiB/s`, and ETA. Non-interactive use gets concise start/completion records including elapsed time and average speed.
+Long-running work reports progress on `stderr`, while command results remain on their existing output stream. Interactive terminals get an updating bar graph with percentage, processed/total bytes, average `KiB/s`/`MiB/s`/`GiB/s`, elapsed time, and ETA. Work whose total is not known yet uses a moving activity bar with elapsed time. Non-interactive use gets concise start/completion records including elapsed time and average speed; `--progress always` adds periodic progress records.
 
 ```sh
 # Global UI options are placed before the command.
@@ -150,6 +150,9 @@ Encryption uses 4 MiB streaming AES-256-GCM chunks. Argon2id derives one package
 ```sh
 sugyeol unpack foo
 sugyeol unpack foo bar
+sugyeol unpack foo_part-000001
+sugyeol unpack .
+sugyeol unpack -y . # non-interactive overwrite approval
 
 sugyeol verify backup_part-*.zip
 sugyeol unpack --out ./restored backup_part-*.zip
@@ -160,7 +163,7 @@ sugyeol verify --pubkey jane-public.pem backup_part-*.zip
 sugyeol verify -k jane-public.pem backup_part-*.zip
 ```
 
-Each unpack argument may be a package prefix (`foo`), a literal ZIP part, or a quoted glob. A prefix automatically discovers both current `foo_part-*.zip` and legacy `foo.part-*.zip` names. Multiple prefixes are grouped by their signed package set IDs, fully verified first, and then restored into the selected output directory. Sugyeol rejects a multi-package command when two packages would restore the same root name rather than silently overwrite one with the other.
+Each unpack argument may be a package prefix (`foo`), a literal ZIP part, a partial part filename (`foo_part-000`), a quoted glob, or a directory. `sugyeol unpack .` discovers every package in the current directory. A prefix automatically discovers both current `foo_part-*.zip` and legacy `foo.part-*.zip` names. A partial filename selects every matching signed package set and then discovers every sibling part. The selected sets are grouped by their signed package set IDs and fully verified before restoration. If multiple packages restore the same root, an interactive run asks before the later package overwrites it; automation must opt in with `--overwrite`/`-y`.
 
 Verification checks ZIP structure, canonical manifest encoding, Ed25519 signature, public-key consistency, SHA-256 payload hashes, part count/order/offsets, encryption/compression parameters, and the declared maximum size. Restoration repeats verification and then safely extracts the TAR while rejecting traversal paths, links, and unsupported entries.
 
@@ -216,6 +219,9 @@ sugyeol verify -s ./source -n 2 \
 # Pull directly from the registry without Docker/Podman and create an OCI tar.
 sugyeol image pull -o app.oci.tar -p linux/amd64 registry.example.com/team/app:1.2.3
 
+# Download alpine:latest but make runtimes import it as alpine:260904.
+sugyeol image pull -t alpine:260904 -o alpine.oci.tar alpine:latest
+
 # A .tgz/.tar.gz output implies gzip; -z is also available.
 sugyeol image pull -o app.oci.tgz -z -p linux/arm64 registry.example.com/team/app:1.2.3
 
@@ -230,6 +236,10 @@ podman load -i app.oci.tar
 sugyeol image sbom -o app.spdx.json app.oci.tar
 sugyeol image sbom -S -l security-scan -o app.spdx.json app.oci.tar
 
+# Select one platform, or emit one signed SBOM per platform into a directory.
+sugyeol image sbom -p linux/arm64 -o app-arm64.spdx.json app-all.oci.tar
+sugyeol image sbom -a -S -o ./app-sboms app-all.oci.tar
+
 # Verify the SBOM-to-archive binding, then its signer against a pinned key.
 sugyeol image sbom verify app.oci.tar app.spdx.json
 sugyeol image sbom verify -k scanner.pem app.oci.tar app.spdx.json app.spdx.json.meta
@@ -238,8 +248,8 @@ sugyeol image sbom verify -k scanner.pem app.oci.tar app.spdx.json app.spdx.json
 sugyeol image pull -S -m app.image.meta -b app.spdx.json -B \
   -o app.oci.tar registry.example.com/team/app:1.2.3
 
-# Pull all manifests in a multi-platform index.
-sugyeol image pull -a -o app-all.oci.tar registry.example.com/team/app:1.2.3
+# Pull all manifests and generate one SBOM per platform in the same operation.
+sugyeol image pull -a -b ./app-sboms -o app-all.oci.tar registry.example.com/team/app:1.2.3
 
 # Pull, validate the manifest/blob graph, and sign the local archive in one command.
 sugyeol image pull -S -l release -m app.image.meta \
@@ -267,9 +277,9 @@ The resulting hybrid archive remains a valid OCI image layout while `docker load
 
 Local signing accepts both OCI Image Layout archives and Docker `docker save` archives, uncompressed or gzip-compressed. Before signing, Sugyeol validates safe TAR paths, rejects links/special entries, checks OCI blob names against their content hashes, follows the complete index/manifest/config/layer descriptor graph, or checks Docker `manifest.json` references. The signature subject contains the root descriptors, references, `index.json` SHA-256, complete archive size/SHA-256, compression, and format. Consequently both semantic image mutation and byte-level archive mutation are detected offline.
 
-`image sbom` is an embedded scanner adapted from the MIT-licensed [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner); it does not invoke Syft, Trivy, Docker, or another SBOM executable. It merges image layers with OCI whiteout semantics, supports uncompressed, gzip, and zstd layers, hashes the resulting regular files, and catalogs Debian dpkg, Alpine apk, npm lockfiles, Go modules, Python requirements/dist-info, Cargo lockfiles, and Maven `pom.properties`. RPM Berkeley DB/SQLite package databases are not decoded yet. The SPDX root package contains the exact source archive SHA-256. `image sbom verify` recalculates that hash and can additionally validate the detached SBOM signature against one or more pinned Ed25519 public keys. A multi-platform archive must currently be scanned one platform at a time; pull it with `-p/--platform` rather than `-a/--all-platforms`.
+`image sbom` is an embedded scanner adapted from the MIT-licensed [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner); it does not invoke Syft, Trivy, Docker, or another SBOM executable. It merges image layers with OCI whiteout semantics, supports uncompressed, gzip, and zstd layers, and hashes every resulting regular file. Native catalogers cover Debian dpkg, Alpine apk, RPM Berkeley DB/NDB/SQLite, installed npm packages and npm/yarn/pnpm locks, Python requirements/dist-info/egg-info/Pipenv/Poetry/uv/pyenv/venv/Conda, Go modules, Cargo, Maven metadata, Ruby Bundler/gemspec, PHP Composer, .NET assets/deps/lock files, Swift Package Manager, and Dart Pub. A database that is recognized but cannot be decoded produces a visible warning and is recorded in the SPDX package comment rather than disappearing silently. The SPDX root package binds the exact archive SHA-256, selected platform, OCI manifest digest when available, OS, and catalog coverage. `image sbom verify` recalculates the archive hash and can additionally validate a detached SBOM signature against pinned Ed25519 public keys. Use `-p/--platform` for one image or `-a/--all-platforms` to write one SPDX document (and optional `.meta` signature) per platform into an output directory.
 
-Pull short options are `-o` (out), `-p` (platform), `-a` (all platforms), `-z` (gzip), `-S` (sign archive), `-m` (archive metadata), `-l` (label), `-b` (SBOM output), and `-B` (sign SBOM). SBOM uses `-o`, `-S`, `-l`; SBOM verification uses `-k`, `-n`. Sign/countersign use `-o`, `-l`, `-k`, and `-n` as applicable. Direct signing of a mutable repository/tag is intentionally not a primary operation; the downloaded immutable archive is the signed artifact.
+Pull short options are `-o` (out), `-p` (platform), `-a` (all platforms), `-t` (import name/tag override), `-z` (gzip), `-S` (sign archive), `-m` (archive metadata), `-l` (label), `-b` (SBOM output), and `-B` (sign SBOM). `-t/--tag` accepts a complete `repository:tag` or a bare replacement tag for the source repository; it changes archive reference metadata, not verified image content. SBOM uses `-o`, `-p`, `-a`, `-S`, `-l`; SBOM verification uses `-k`, `-n`. Sign/countersign use `-o`, `-l`, `-k`, and `-n` as applicable. Direct signing of a mutable repository/tag is intentionally not a primary operation; the downloaded immutable archive is the signed artifact.
 
 ## Internationalization
 
@@ -285,7 +295,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.5.0  # short: -v v1.5.0
+sugyeol update --version v1.6.0  # short: -v v1.6.0
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -297,12 +307,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.5.0
+make release VERSION=1.6.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.5.0 \
-  dist/sugyeol_1.5.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.5.0"
+gh release create v1.6.0 \
+  dist/sugyeol_1.6.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.0"
 ```
 
 ## Security boundaries

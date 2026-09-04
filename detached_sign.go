@@ -310,7 +310,9 @@ func buildSignedManifest(source string) ([]byte, signedManifest, error) {
 	}
 	m := signedManifest{Format: "sugyeol-sha256-manifest", Version: 1, RootName: rootInfo.Name()}
 	parent := filepath.Dir(abs)
+	scanProgress := newProgress(tr("progress_scan_source"), 0)
 	total, err := regularFileBytes(abs)
+	scanProgress.Finish(err)
 	if err != nil {
 		return nil, signedManifest{}, err
 	}

@@ -24,7 +24,7 @@
 
 ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
-현재 릴리스는 **v1.5.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
+현재 릴리스는 **v1.6.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## 빌드와 설치
 
@@ -36,11 +36,11 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.5.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+`make release VERSION=1.6.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
 
 ## 진행률·상세 출력·디버그·취소
 
-오래 걸리는 작업의 진행 UI는 `stderr`로 출력하고 명령 결과는 기존 출력 채널을 유지합니다. 대화형 터미널에서는 퍼센트, 처리 바이트, 평균 `KiB/s`·`MiB/s`·`GiB/s`, ETA를 갱신형 bar로 보여줍니다. 비대화형 실행에서는 시작·완료·경과 시간·평균 속도를 간결한 로그로 남깁니다.
+오래 걸리는 작업의 진행 UI는 `stderr`로 출력하고 명령 결과는 기존 출력 채널을 유지합니다. 대화형 터미널에서는 bar graph, 퍼센트, 처리량/전체량, 평균 `KiB/s`·`MiB/s`·`GiB/s`, 경과시간, ETA를 함께 보여줍니다. 아직 전체량을 모르는 탐색·네트워크 단계는 움직이는 activity bar와 경과시간을 표시합니다. 비대화형 실행은 시작·완료·경과시간·평균속도를 간결한 로그로 남기고 `--progress always`에서는 주기적인 진행 로그도 출력합니다.
 
 ```sh
 # 전역 UI 옵션은 명령 앞에 둡니다.
@@ -149,6 +149,9 @@ sugyeol unpack -P "automation-secret" -o ./restored secret_part-*.zip
 ```sh
 sugyeol unpack foo
 sugyeol unpack foo bar
+sugyeol unpack foo_part-000001
+sugyeol unpack .
+sugyeol unpack -y . # 비대화형 덮어쓰기 승인
 
 sugyeol verify backup_part-*.zip
 sugyeol unpack --out ./restored backup_part-*.zip
@@ -159,7 +162,7 @@ sugyeol verify --pubkey hong-public.pem backup_part-*.zip
 sugyeol verify -k hong-public.pem backup_part-*.zip
 ```
 
-unpack의 각 인자는 패키지 접두사(`foo`), ZIP 파트 경로 또는 따옴표로 감싼 glob 패턴일 수 있습니다. 접두사는 현재 형식인 `foo_part-*.zip`과 기존 `foo.part-*.zip`을 모두 자동 탐색합니다. 여러 접두사를 주면 서명된 package set ID로 파트를 구분해 모든 패키지를 먼저 검증한 뒤 지정한 출력 디렉터리에 복구합니다. 두 패키지가 같은 루트 이름을 복구하려 하면 조용히 덮어쓰지 않고 오류로 중단합니다.
+unpack의 각 인자는 패키지 접두사(`foo`), ZIP 파트 경로, 파트 파일명의 일부(`foo_part-000`), 따옴표로 감싼 glob 패턴 또는 디렉터리일 수 있습니다. `sugyeol unpack .`은 현재 디렉터리의 모든 패키지를 찾습니다. 접두사는 현재 형식인 `foo_part-*.zip`과 기존 `foo.part-*.zip`을 모두 자동 탐색합니다. 파일명 일부는 일치하는 모든 서명 package set을 선택하고 같은 디렉터리의 나머지 파트도 모두 찾습니다. 선택된 묶음은 package set ID로 구분해 모두 먼저 검증한 뒤 복구합니다. 여러 패키지의 복구 루트가 겹치면 대화형 실행은 뒤 패키지로 덮어쓸지 묻고, 자동화에서는 `--overwrite`/`-y`로 명시해야 합니다.
 
 검사는 ZIP 구조, canonical manifest, Ed25519 서명, 파트 공개키 일치, SHA-256, 파트 개수·순서·offset, 압축·암호화 매개변수, 최대 파일 크기를 확인합니다. 복구는 이를 다시 확인한 뒤 TAR 경로 탈출, 링크, 지원하지 않는 항목을 거부하면서 안전하게 풉니다.
 
@@ -215,6 +218,9 @@ sugyeol verify -s ./source -n 2 \
 # Docker/Podman 없이 레지스트리에서 직접 받아 OCI tar를 만듭니다.
 sugyeol image pull -o app.oci.tar -p linux/amd64 registry.example.com/team/app:1.2.3
 
+# alpine:latest를 받되 runtime에는 alpine:260904로 import되게 합니다.
+sugyeol image pull -t alpine:260904 -o alpine.oci.tar alpine:latest
+
 # .tgz/.tar.gz 출력은 gzip을 자동 선택하며 -z도 쓸 수 있습니다.
 sugyeol image pull -o app.oci.tgz -z -p linux/arm64 registry.example.com/team/app:1.2.3
 
@@ -229,6 +235,10 @@ podman load -i app.oci.tar
 sugyeol image sbom -o app.spdx.json app.oci.tar
 sugyeol image sbom -S -l security-scan -o app.spdx.json app.oci.tar
 
+# 한 플랫폼을 선택하거나 디렉터리에 플랫폼별 서명 SBOM을 만듭니다.
+sugyeol image sbom -p linux/arm64 -o app-arm64.spdx.json app-all.oci.tar
+sugyeol image sbom -a -S -o ./app-sboms app-all.oci.tar
+
 # SBOM과 아카이브의 결합을 검사한 뒤 고정한 공개키로 서명자도 검증합니다.
 sugyeol image sbom verify app.oci.tar app.spdx.json
 sugyeol image sbom verify -k scanner.pem app.oci.tar app.spdx.json app.spdx.json.meta
@@ -237,8 +247,8 @@ sugyeol image sbom verify -k scanner.pem app.oci.tar app.spdx.json app.spdx.json
 sugyeol image pull -S -m app.image.meta -b app.spdx.json -B \
   -o app.oci.tar registry.example.com/team/app:1.2.3
 
-# 멀티 플랫폼 index의 모든 manifest를 받습니다.
-sugyeol image pull -a -o app-all.oci.tar registry.example.com/team/app:1.2.3
+# 모든 manifest를 받고 같은 작업에서 플랫폼별 SBOM도 만듭니다.
+sugyeol image pull -a -b ./app-sboms -o app-all.oci.tar registry.example.com/team/app:1.2.3
 
 # 다운로드·manifest/blob 그래프 검증·로컬 아카이브 서명을 한 번에 수행합니다.
 sugyeol image pull -S -l release -m app.image.meta \
@@ -266,9 +276,9 @@ sugyeol image verify -n 2 -k release.pem -k reviewer.pem app.oci.tgz app.image.m
 
 로컬 서명은 무압축/gzip OCI Image Layout과 Docker `docker save` 아카이브를 모두 인식합니다. 서명 전 안전한 TAR 경로만 허용하고 링크/특수 항목을 거부하며, OCI blob 이름과 실제 content hash를 대조하고 index/manifest/config/layer descriptor 전체 그래프를 따라가거나 Docker `manifest.json` 참조를 검사합니다. 서명 subject에는 root descriptor, reference, `index.json` SHA-256, 완성 아카이브 크기/SHA-256, 압축 방식과 포맷이 들어갑니다. 따라서 이미지 의미 변조와 아카이브 바이트 변조를 모두 오프라인에서 탐지합니다.
 
-`image sbom`은 MIT 라이선스 [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner)의 스캐너를 수결에 맞게 가져온 내장 기능이며 Syft, Trivy, Docker 또는 별도 SBOM 실행 파일을 호출하지 않습니다. OCI whiteout 규칙에 따라 image layer를 합치고 무압축/gzip/zstd layer를 처리하며, 최종 regular file을 해시하고 Debian dpkg, Alpine apk, npm lockfile, Go module, Python requirements/dist-info, Cargo lockfile, Maven `pom.properties`를 수집합니다. RPM Berkeley DB/SQLite package database 해석은 아직 지원하지 않습니다. SPDX root package에는 원본 archive의 정확한 SHA-256이 들어갑니다. `image sbom verify`는 이를 다시 계산하며, 선택적으로 하나 이상의 고정한 Ed25519 공개키로 detached SBOM 서명까지 검증합니다. 멀티 플랫폼 archive는 현재 플랫폼별로 생성해야 하므로 `-a/--all-platforms` 대신 `-p/--platform`으로 받습니다.
+`image sbom`은 MIT 라이선스 [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner)의 스캐너를 수결에 맞게 가져온 내장 기능이며 Syft, Trivy, Docker 또는 별도 SBOM 실행 파일을 호출하지 않습니다. OCI whiteout 규칙에 따라 image layer를 합치고 무압축/gzip/zstd layer를 처리하며 최종 regular file을 모두 해시합니다. 네이티브 cataloger는 Debian dpkg, Alpine apk, RPM Berkeley DB/NDB/SQLite, 설치된 npm package와 npm/yarn/pnpm lock, Python requirements/dist-info/egg-info/Pipenv/Poetry/uv/pyenv/venv/Conda, Go module, Cargo, Maven metadata, Ruby Bundler/gemspec, PHP Composer, .NET assets/deps/lock, Swift Package Manager, Dart Pub을 지원합니다. 인식한 database를 해석하지 못하면 조용히 누락하지 않고 화면 경고와 SPDX package comment에 남깁니다. SPDX root package는 원본 archive SHA-256, 선택한 플랫폼, 가능한 경우 OCI manifest digest, OS와 catalog 범위를 묶습니다. `image sbom verify`는 archive hash를 다시 계산하며 고정한 Ed25519 공개키로 detached SBOM 서명도 검증할 수 있습니다. `-p/--platform`은 한 플랫폼, `-a/--all-platforms`는 출력 디렉터리에 플랫폼별 SPDX와 선택적 `.meta` 서명을 만듭니다.
 
-Pull 단축 옵션은 `-o`(out), `-p`(platform), `-a`(전체 플랫폼), `-z`(gzip), `-S`(archive 서명), `-m`(archive metadata), `-l`(label), `-b`(SBOM 출력), `-B`(SBOM 서명)입니다. SBOM은 `-o`, `-S`, `-l`, SBOM 검증은 `-k`, `-n`을 씁니다. Sign/countersign에는 상황에 따라 `-o`, `-l`, `-k`, `-n`을 씁니다. 변경 가능한 리포지터리/태그 자체를 직접 서명하는 것은 기본 기능으로 두지 않고, 다운로드한 불변 아카이브를 서명 대상으로 삼습니다.
+Pull 단축 옵션은 `-o`(out), `-p`(platform), `-a`(전체 플랫폼), `-t`(import 이름/tag 강제), `-z`(gzip), `-S`(archive 서명), `-m`(archive metadata), `-l`(label), `-b`(SBOM 출력), `-B`(SBOM 서명)입니다. `-t/--tag`는 완전한 `repository:tag` 또는 원본 repository에 적용할 tag 하나만 받을 수 있으며, 검증된 image content가 아니라 archive 참조 metadata만 변경합니다. SBOM은 `-o`, `-p`, `-a`, `-S`, `-l`, SBOM 검증은 `-k`, `-n`을 씁니다. Sign/countersign에는 상황에 따라 `-o`, `-l`, `-k`, `-n`을 씁니다. 변경 가능한 리포지터리/태그 자체를 직접 서명하는 것은 기본 기능으로 두지 않고, 다운로드한 불변 아카이브를 서명 대상으로 삼습니다.
 
 ## 다국어
 
@@ -284,7 +294,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check          # 단축: -c
 sugyeol update --force          # 단축: -f
-sugyeol update --version v1.5.0 # 단축: -v v1.5.0
+sugyeol update --version v1.6.0 # 단축: -v v1.6.0
 ```
 
 현재 플랫폼용 GitHub Release 자산을 받고 `SHA256SUMS`를 확인한 뒤 실행 파일을 원자 교체합니다. 대화형 실행은 최대 24시간에 한 번 실패 허용 방식으로 새 버전 알림만 확인하며 실제 교체에는 항상 `sugyeol update`가 필요합니다. `SUGYEOL_NO_UPDATE_CHECK=1`로 알림 확인을 끌 수 있습니다.
@@ -296,12 +306,12 @@ GitHub Actions는 의도적으로 비활성화했습니다. 직접 빌드·테�
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.5.0
+make release VERSION=1.6.0
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.5.0 \
-  dist/sugyeol_1.5.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.5.0"
+gh release create v1.6.0 \
+  dist/sugyeol_1.6.0_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.0"
 ```
 
 ## 보안 경계

@@ -22,10 +22,13 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
+	rpmdb "github.com/anchore/go-rpmdb/pkg"
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -33,6 +36,7 @@ type sbomFile struct {
 	Path, SHA256, Layer string
 	Size                int64
 	Data                []byte
+	Temp                *os.File
 }
 
 type sbomPackage struct {
@@ -40,10 +44,18 @@ type sbomPackage struct {
 }
 
 type sbomScanResult struct {
-	Name, SourceHash, SourceType, OSName, OSVersion string
-	ScannedAt                                       time.Time
-	Files                                           []sbomFile
-	Packages                                        []sbomPackage
+	Name, SourceHash, SourceType, ManifestDigest, OSName, OSVersion string
+	ScannedAt                                                       time.Time
+	Platform                                                        ociPlatform
+	Files                                                           []sbomFile
+	Packages                                                        []sbomPackage
+	Warnings                                                        []string
+}
+
+type sbomImageTarget struct {
+	Platform       ociPlatform
+	ManifestDigest string
+	Layers         []string
 }
 
 type sbomOuterEntry struct {
@@ -61,19 +73,27 @@ func imageSBOMCommand(args []string) error {
 	out := fs.String("out", "", "SPDX 2.3 JSON output path")
 	sign := fs.Bool("sign", false, "sign the generated SBOM with the local identity")
 	label := fs.String("label", "sbom", "signature role/purpose label")
+	platform := fs.String("platform", runtime.GOOS+"/"+runtime.GOARCH, "platform os/arch[/variant]")
+	allPlatforms := fs.Bool("all-platforms", false, "generate one SBOM per platform into the output directory")
 	fs.StringVar(out, "o", "", "SPDX 2.3 JSON output path")
 	fs.BoolVar(sign, "S", false, "sign the generated SBOM with the local identity")
 	fs.StringVar(label, "l", "sbom", "signature role/purpose label")
+	fs.StringVar(platform, "p", runtime.GOOS+"/"+runtime.GOARCH, "platform os/arch[/variant]")
+	fs.BoolVar(allPlatforms, "a", false, "generate one SBOM per platform into the output directory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: sugyeol image sbom [-S] [-o image.spdx.json] <image.tar|image.tgz>")
+		return fmt.Errorf("usage: sugyeol image sbom [-S] [-p linux/amd64|-a] [-o image.spdx.json|directory] <image.tar|image.tgz>")
 	}
 	if *out == "" {
-		*out = defaultSBOMName(fs.Arg(0))
+		if *allPlatforms {
+			*out = strings.TrimSuffix(defaultSBOMName(fs.Arg(0)), ".spdx.json") + "-sboms"
+		} else {
+			*out = defaultSBOMName(fs.Arg(0))
+		}
 	}
-	return generateImageSBOM(fs.Arg(0), *out, *sign, *label)
+	return generateImageSBOMs(fs.Arg(0), *out, *sign, *label, *platform, *allPlatforms)
 }
 
 func imageSBOMVerifyCommand(args []string) error {
@@ -117,34 +137,78 @@ func defaultSBOMName(archive string) string {
 }
 
 func generateImageSBOM(archive, output string, sign bool, label string) (resultErr error) {
-	if _, err := os.Lstat(output); err == nil {
-		return fmt.Errorf("output already exists: %s", output)
-	} else if !os.IsNotExist(err) {
+	return generateImageSBOMs(archive, output, sign, label, runtime.GOOS+"/"+runtime.GOARCH, false)
+}
+
+func generateImageSBOMs(archive, output string, sign bool, label, platform string, allPlatforms bool) (resultErr error) {
+	subject, err := inspectContainerArchive(archive)
+	if err != nil {
 		return err
 	}
-	subject, err := inspectContainerArchive(archive)
+	wanted, err := parseOCIPlatform(platform)
 	if err != nil {
 		return err
 	}
 	progress := newProgress(tr("progress_sbom"), 0)
 	defer func() { progress.Finish(resultErr) }()
-	result, err := scanImageArchive(commandContext, archive, subject.ArchiveSHA256)
+	results, err := scanImageArchivePlatforms(commandContext, archive, subject.ArchiveSHA256, wanted, allPlatforms, progress)
 	if err != nil {
 		return err
 	}
-	b, err := marshalSPDX(result)
-	if err != nil {
+	if allPlatforms {
+		if info, statErr := os.Lstat(output); statErr == nil && !info.IsDir() {
+			return fmt.Errorf("multi-platform SBOM output must be a directory: %s", output)
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return statErr
+		}
+		if err := os.MkdirAll(output, 0755); err != nil {
+			return err
+		}
+	} else if _, err := os.Lstat(output); err == nil {
+		return fmt.Errorf("output already exists: %s", output)
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := writeNewFileAtomic(output, append(b, '\n')); err != nil {
-		return err
+	for _, result := range results {
+		destination := output
+		if allPlatforms {
+			destination = filepath.Join(output, sbomPlatformFilename(result.Platform))
+		}
+		b, err := marshalSPDX(result)
+		if err != nil {
+			return err
+		}
+		if err := writeNewFileAtomic(destination, append(b, '\n')); err != nil {
+			return err
+		}
+		fmt.Printf("SPDX 2.3 SBOM created: %s\nplatform: %s\npackages: %d\nfiles: %d\nsource sha256: %s\n", destination, formatOCIPlatform(result.Platform), len(result.Packages), len(result.Files), result.SourceHash)
+		for _, warning := range result.Warnings {
+			fmt.Fprintf(os.Stderr, "warning: SBOM coverage incomplete: %s\n", warning)
+		}
+		if sign {
+			if err := signCommand([]string{"-o", destination + ".meta", "-l", label, destination}); err != nil {
+				return err
+			}
+		}
 	}
 	progress.Finish(nil)
-	fmt.Printf("SPDX 2.3 SBOM created: %s\npackages: %d\nfiles: %d\nsource sha256: %s\n", output, len(result.Packages), len(result.Files), result.SourceHash)
-	if sign {
-		return signCommand([]string{"-o", output + ".meta", "-l", label, output})
-	}
 	return nil
+}
+
+func sbomPlatformFilename(platform ociPlatform) string {
+	name := platform.OS + "-" + platform.Architecture
+	if platform.Variant != "" {
+		name += "-" + platform.Variant
+	}
+	return safeSBOMID(name) + ".spdx.json"
+}
+
+func formatOCIPlatform(platform ociPlatform) string {
+	value := platform.OS + "/" + platform.Architecture
+	if platform.Variant != "" {
+		value += "/" + platform.Variant
+	}
+	return strings.Trim(value, "/")
 }
 
 func writeNewFileAtomic(output string, data []byte) error {
@@ -186,26 +250,91 @@ func writeNewFileAtomic(output string, data []byte) error {
 }
 
 func scanImageArchive(ctx context.Context, archive, sourceHash string) (sbomScanResult, error) {
+	results, err := scanImageArchivePlatforms(ctx, archive, sourceHash, ociPlatform{OS: runtime.GOOS, Architecture: runtime.GOARCH}, false, nil)
+	if err != nil {
+		return sbomScanResult{}, err
+	}
+	if len(results) != 1 {
+		return sbomScanResult{}, fmt.Errorf("expected one SBOM result, got %d", len(results))
+	}
+	return results[0], nil
+}
+
+func scanImageArchivePlatforms(ctx context.Context, archive, sourceHash string, wanted ociPlatform, allPlatforms bool, progress *progressBar) ([]sbomScanResult, error) {
 	entries, cleanup, err := readSBOMOuter(ctx, archive)
 	if err != nil {
-		return sbomScanResult{}, err
+		return nil, err
 	}
 	defer cleanup()
-	files, kind, err := unpackSBOMImage(ctx, entries)
+	targets, kind, err := resolveSBOMTargets(entries)
 	if err != nil {
-		return sbomScanResult{}, err
+		return nil, err
 	}
-	list := make([]sbomFile, 0, len(files))
-	for _, f := range files {
-		list = append(list, f)
+	if !allPlatforms {
+		matches := targets[:0]
+		for _, target := range targets {
+			if platformMatches(target.Platform, wanted) {
+				matches = append(matches, target)
+			}
+		}
+		if len(matches) != 1 {
+			return nil, fmt.Errorf("platform %s matched %d images; use --platform or --all-platforms", formatOCIPlatform(wanted), len(matches))
+		}
+		targets = matches
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].Path < list[j].Path })
-	packages, osName, osVersion := catalogSBOMPackages(list)
-	for _, p := range packages {
-		uiVerbosef("SBOM package %s %s (%s)", p.Name, p.Version, p.Type)
+	var total int64
+	for _, target := range targets {
+		for _, layer := range target.Layers {
+			if entry, ok := entries[layer]; ok && entry.Size > 0 && total <= (1<<63-1)-entry.Size {
+				total += entry.Size
+			}
+		}
 	}
-	return sbomScanResult{Name: filepath.Base(archive), SourceHash: sourceHash, SourceType: kind,
-		ScannedAt: time.Now().UTC(), Files: list, Packages: packages, OSName: osName, OSVersion: osVersion}, nil
+	progress.SetTotal(total)
+	results := make([]sbomScanResult, 0, len(targets))
+	for _, target := range targets {
+		files := make(map[string]sbomFile)
+		for _, layer := range target.Layers {
+			if err := ctx.Err(); err != nil {
+				cleanupSBOMTemps(files)
+				return nil, err
+			}
+			e, ok := entries[layer]
+			if !ok {
+				cleanupSBOMTemps(files)
+				return nil, fmt.Errorf("image layer %q missing", layer)
+			}
+			uiVerbosef("SBOM apply %s layer %s (%s)", formatOCIPlatform(target.Platform), layer, humanSize(e.Size))
+			if err := applySBOMLayer(e, files, layer, progress); err != nil {
+				cleanupSBOMTemps(files)
+				return nil, err
+			}
+		}
+		list := make([]sbomFile, 0, len(files))
+		for _, file := range files {
+			list = append(list, file)
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].Path < list[j].Path })
+		packages, osName, osVersion, warnings := catalogSBOMPackages(list)
+		cleanupSBOMTemps(files)
+		for i := range list {
+			list[i].Temp = nil
+		}
+		for _, p := range packages {
+			uiVerbosef("SBOM package %s %s (%s)", p.Name, p.Version, p.Type)
+		}
+		name := filepath.Base(archive)
+		if len(targets) > 1 {
+			name += "@" + formatOCIPlatform(target.Platform)
+		}
+		results = append(results, sbomScanResult{Name: name, SourceHash: sourceHash, SourceType: kind, ManifestDigest: target.ManifestDigest, Platform: target.Platform,
+			ScannedAt: time.Now().UTC(), Files: list, Packages: packages, OSName: osName, OSVersion: osVersion, Warnings: warnings})
+	}
+	return results, nil
+}
+
+func platformMatches(actual, wanted ociPlatform) bool {
+	return actual.OS == wanted.OS && actual.Architecture == wanted.Architecture && (wanted.Variant == "" || actual.Variant == wanted.Variant)
 }
 
 func readSBOMOuter(ctx context.Context, archive string) (map[string]sbomOuterEntry, func(), error) {
@@ -297,66 +426,141 @@ func safeSBOMPath(name string) (string, error) {
 	return name, nil
 }
 
-func unpackSBOMImage(ctx context.Context, entries map[string]sbomOuterEntry) (map[string]sbomFile, string, error) {
+func resolveSBOMTargets(entries map[string]sbomOuterEntry) ([]sbomImageTarget, string, error) {
 	manifestEntry, docker := entries["manifest.json"]
-	if docker {
+	_, hasOCIIndex := entries["index.json"]
+	if docker && !hasOCIIndex {
 		var manifests []dockerArchiveManifestItem
 		if err := json.Unmarshal(manifestEntry.Data, &manifests); err != nil || len(manifests) == 0 {
 			return nil, "", fmt.Errorf("invalid Docker manifest.json")
 		}
-		if len(manifests) != 1 {
-			return nil, "", fmt.Errorf("SBOM generation requires a single-platform archive; pull with --platform instead of --all-platforms")
-		}
-		files := make(map[string]sbomFile)
-		for _, layer := range manifests[0].Layers {
-			if err := ctx.Err(); err != nil {
-				return nil, "", err
-			}
-			layerPath, err := safeSBOMPath(layer)
+		targets := make([]sbomImageTarget, 0, len(manifests))
+		for _, manifest := range manifests {
+			configPath, err := safeSBOMPath(manifest.Config)
 			if err != nil {
 				return nil, "", err
 			}
-			e, ok := entries[layerPath]
+			config, ok := entries[configPath]
 			if !ok {
-				return nil, "", fmt.Errorf("Docker layer %q missing", layer)
+				return nil, "", fmt.Errorf("Docker config %q missing", manifest.Config)
 			}
-			uiVerbosef("SBOM apply layer %s (%s)", layer, humanSize(e.Size))
-			if err := applySBOMLayer(e, files, layer); err != nil {
-				return nil, "", err
+			var imageConfig struct {
+				Architecture string `json:"architecture"`
+				OS           string `json:"os"`
+				Variant      string `json:"variant"`
 			}
+			if err := json.Unmarshal(config.Data, &imageConfig); err != nil || imageConfig.OS == "" || imageConfig.Architecture == "" {
+				return nil, "", fmt.Errorf("Docker config %q has no valid platform", manifest.Config)
+			}
+			target := sbomImageTarget{Platform: ociPlatform{OS: imageConfig.OS, Architecture: imageConfig.Architecture, Variant: imageConfig.Variant}}
+			for _, layer := range manifest.Layers {
+				layerPath, err := safeSBOMPath(layer)
+				if err != nil {
+					return nil, "", err
+				}
+				if _, ok := entries[layerPath]; !ok {
+					return nil, "", fmt.Errorf("Docker layer %q missing", layer)
+				}
+				target.Layers = append(target.Layers, layerPath)
+			}
+			targets = append(targets, target)
 		}
-		return files, "docker-archive", nil
+		return targets, "docker-archive", nil
 	}
 	idx, ok := entries["index.json"]
 	if !ok {
 		return nil, "", fmt.Errorf("SBOM requires an OCI or Docker image archive")
 	}
 	var index ociIndex
-	if err := json.Unmarshal(idx.Data, &index); err != nil || len(index.Manifests) != 1 {
-		return nil, "", fmt.Errorf("SBOM generation requires a valid single-platform OCI index")
+	if err := json.Unmarshal(idx.Data, &index); err != nil || len(index.Manifests) == 0 {
+		return nil, "", fmt.Errorf("invalid OCI index")
 	}
-	manifestEntry, ok = entries[containerBlobPath(index.Manifests[0].Digest)]
-	if !ok {
-		return nil, "", fmt.Errorf("OCI manifest blob missing")
-	}
-	var manifest ociManifest
-	if err := json.Unmarshal(manifestEntry.Data, &manifest); err != nil {
-		return nil, "", err
-	}
-	files := make(map[string]sbomFile)
-	for _, layer := range manifest.Layers {
-		e, ok := entries[containerBlobPath(layer.Digest)]
-		if !ok {
-			return nil, "", fmt.Errorf("OCI layer %s missing", layer.Digest)
+	var targets []sbomImageTarget
+	visited := make(map[string]bool)
+	var visit func(ociDescriptor, *ociPlatform) error
+	visit = func(descriptor ociDescriptor, inherited *ociPlatform) error {
+		visitKey := descriptor.Digest
+		if inherited != nil {
+			visitKey += "\x00" + formatOCIPlatform(*inherited)
 		}
-		if err := applySBOMLayer(e, files, layer.Digest); err != nil {
+		if visited[visitKey] {
+			return nil
+		}
+		visited[visitKey] = true
+		entry, ok := entries[containerBlobPath(descriptor.Digest)]
+		if !ok {
+			return fmt.Errorf("OCI descriptor blob missing: %s", descriptor.Digest)
+		}
+		platform := descriptor.Platform
+		if platform == nil {
+			platform = inherited
+		}
+		switch descriptor.MediaType {
+		case ociIndexMediaType, dockerIndexMediaType:
+			var nested ociIndex
+			if err := json.Unmarshal(entry.Data, &nested); err != nil {
+				return err
+			}
+			for _, child := range nested.Manifests {
+				if err := visit(child, platform); err != nil {
+					return err
+				}
+			}
+		case ociManifestMediaType, dockerManifestMediaType:
+			var manifest ociManifest
+			if err := json.Unmarshal(entry.Data, &manifest); err != nil {
+				return err
+			}
+			if manifest.Config.MediaType != ociConfigMediaType && manifest.Config.MediaType != dockerConfigMediaType {
+				return nil
+			}
+			if !hasOnlyImageLayers(manifest) {
+				uiVerbosef("SBOM skip non-runnable artifact manifest %s", descriptor.Digest)
+				return nil
+			}
+			configEntry, ok := entries[containerBlobPath(manifest.Config.Digest)]
+			if !ok {
+				return fmt.Errorf("OCI config blob missing: %s", manifest.Config.Digest)
+			}
+			var config struct {
+				Architecture string `json:"architecture"`
+				OS           string `json:"os"`
+				Variant      string `json:"variant"`
+			}
+			if err := json.Unmarshal(configEntry.Data, &config); err != nil {
+				return err
+			}
+			resolved := ociPlatform{OS: config.OS, Architecture: config.Architecture, Variant: config.Variant}
+			if platform != nil {
+				resolved = *platform
+			}
+			if resolved.OS == "" || resolved.Architecture == "" || resolved.OS == "unknown" || resolved.Architecture == "unknown" {
+				return nil
+			}
+			target := sbomImageTarget{Platform: resolved, ManifestDigest: descriptor.Digest}
+			for _, layer := range manifest.Layers {
+				layerPath := containerBlobPath(layer.Digest)
+				if _, ok := entries[layerPath]; !ok {
+					return fmt.Errorf("OCI layer %s missing", layer.Digest)
+				}
+				target.Layers = append(target.Layers, layerPath)
+			}
+			targets = append(targets, target)
+		}
+		return nil
+	}
+	for _, descriptor := range index.Manifests {
+		if err := visit(descriptor, descriptor.Platform); err != nil {
 			return nil, "", err
 		}
 	}
-	return files, "oci-archive", nil
+	if len(targets) == 0 {
+		return nil, "", fmt.Errorf("OCI archive has no runnable image manifests")
+	}
+	return targets, "oci-archive", nil
 }
 
-func applySBOMLayer(entry sbomOuterEntry, files map[string]sbomFile, layer string) error {
+func applySBOMLayer(entry sbomOuterEntry, files map[string]sbomFile, layer string, progress *progressBar) error {
 	var input io.Reader
 	if entry.Temp != nil {
 		if _, err := entry.Temp.Seek(0, io.SeekStart); err != nil {
@@ -365,6 +569,9 @@ func applySBOMLayer(entry sbomOuterEntry, files map[string]sbomFile, layer strin
 		input = entry.Temp
 	} else {
 		input = bytes.NewReader(entry.Data)
+	}
+	if progress != nil {
+		input = progress.Reader(input)
 	}
 	br := bufio.NewReader(input)
 	var rd io.Reader = br
@@ -404,14 +611,17 @@ func applySBOMLayer(entry sbomOuterEntry, files map[string]sbomFile, layer strin
 				prefix := strings.TrimPrefix(dir+"/", "./")
 				for p := range files {
 					if strings.HasPrefix(p, prefix) {
+						cleanupWorkingTemp(files[p].Temp)
 						delete(files, p)
 					}
 				}
 			} else {
 				victim := path.Join(dir, strings.TrimPrefix(base, ".wh."))
+				cleanupWorkingTemp(files[victim].Temp)
 				delete(files, victim)
 				for p := range files {
 					if strings.HasPrefix(p, victim+"/") {
+						cleanupWorkingTemp(files[p].Temp)
 						delete(files, p)
 					}
 				}
@@ -423,16 +633,43 @@ func applySBOMLayer(entry sbomOuterEntry, files map[string]sbomFile, layer strin
 		}
 		hash := sha256.New()
 		var data []byte
-		if h.Size <= maxContainerMetadata && sbomInteresting(name) {
+		var rpmTemp *os.File
+		if sbomRPMDBPath(name) {
+			rpmTemp, err = createWorkingTemp("rpmdb-*")
+			if err == nil {
+				_, err = io.Copy(io.MultiWriter(hash, rpmTemp), tr)
+			}
+			if err == nil {
+				err = rpmTemp.Sync()
+			}
+		} else if h.Size <= maxContainerMetadata && sbomInteresting(name) {
 			data, err = io.ReadAll(io.TeeReader(tr, hash))
 		} else {
 			_, err = io.Copy(hash, tr)
 		}
 		if err != nil {
+			cleanupWorkingTemp(rpmTemp)
 			return err
 		}
-		files[name] = sbomFile{Path: name, Size: h.Size, SHA256: hex.EncodeToString(hash.Sum(nil)), Data: data, Layer: layer}
+		cleanupWorkingTemp(files[name].Temp)
+		files[name] = sbomFile{Path: name, Size: h.Size, SHA256: hex.EncodeToString(hash.Sum(nil)), Data: data, Temp: rpmTemp, Layer: layer}
 	}
+}
+
+func cleanupSBOMTemps(files map[string]sbomFile) {
+	for _, file := range files {
+		cleanupWorkingTemp(file.Temp)
+	}
+}
+
+func sbomRPMDBPath(filePath string) bool {
+	filePath = strings.ToLower(strings.TrimPrefix(filePath, "/"))
+	base := path.Base(filePath)
+	if base != "packages" && base != "packages.db" && base != "rpmdb.sqlite" {
+		return false
+	}
+	dir := path.Dir(filePath)
+	return dir == "var/lib/rpm" || dir == "usr/share/rpm" || dir == "usr/lib/sysimage/rpm" || strings.HasSuffix(dir, "/var/lib/rpm") || strings.HasSuffix(dir, "/usr/share/rpm") || strings.HasSuffix(dir, "/usr/lib/sysimage/rpm")
 }
 
 func sbomInteresting(p string) bool {
@@ -442,13 +679,13 @@ func sbomInteresting(p string) bool {
 		return true
 	}
 	switch base {
-	case "package-lock.json", "npm-shrinkwrap.json", "go.mod", "requirements.txt", "cargo.lock", "pom.properties":
+	case "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "go.mod", "requirements.txt", "pipfile.lock", "poetry.lock", "uv.lock", "cargo.lock", "pom.properties", "composer.lock", "gemfile.lock", "project.assets.json", "packages.lock.json", "package.resolved", "pubspec.lock", "pyvenv.cfg", ".python-version", "node_version.h":
 		return true
 	}
-	return strings.HasSuffix(p, ".dist-info/metadata")
+	return strings.HasSuffix(p, ".dist-info/metadata") || strings.HasSuffix(p, ".egg-info/pkg-info") || strings.HasSuffix(p, ".deps.json") || strings.HasSuffix(p, ".gemspec") || (base == "package.json" && strings.Contains(p, "node_modules/")) || (strings.HasSuffix(p, ".json") && strings.Contains(p, "/conda-meta/"))
 }
 
-func catalogSBOMPackages(files []sbomFile) ([]sbomPackage, string, string) {
+func catalogSBOMPackages(files []sbomFile) ([]sbomPackage, string, string, []string) {
 	seen := make(map[string]sbomPackage)
 	add := func(p sbomPackage) {
 		if p.Name == "" {
@@ -460,11 +697,43 @@ func catalogSBOMPackages(files []sbomFile) ([]sbomPackage, string, string) {
 		seen[p.Type+"\x00"+p.Name+"\x00"+p.Version] = p
 	}
 	osName, osVersion := "", ""
+	var warnings []string
 	for _, f := range files {
+		if f.Temp != nil && sbomRPMDBPath(f.Path) {
+			db, err := rpmdb.Open(f.Temp.Name())
+			if err != nil {
+				uiVerbosef("SBOM RPM database skipped %s: %v", f.Path, err)
+				warnings = append(warnings, fmt.Sprintf("RPM database %s could not be decoded: %v", f.Path, err))
+			} else {
+				packages, listErr := db.ListPackages()
+				_ = db.Close()
+				if listErr != nil {
+					uiVerbosef("SBOM RPM database skipped %s: %v", f.Path, listErr)
+					warnings = append(warnings, fmt.Sprintf("RPM database %s could not be listed: %v", f.Path, listErr))
+				} else {
+					for _, p := range packages {
+						if p == nil {
+							continue
+						}
+						packageVersion := p.Version
+						if p.Release != "" {
+							packageVersion += "-" + p.Release
+						}
+						add(sbomPackage{Name: p.Name, Version: packageVersion, Architecture: p.Arch, License: p.License, Type: "rpm", Source: f.Path})
+					}
+				}
+			}
+		}
+		if version, ok := sbomPyenvRuntime(f.Path); ok {
+			add(sbomPackage{Name: "python", Version: version, Type: "generic", PURL: "pkg:generic/python@" + url.PathEscape(version), Source: f.Path})
+		}
 		if len(f.Data) == 0 {
 			continue
 		}
 		lower := strings.ToLower(f.Path)
+		if catalogExtraSBOMFile(f, add) {
+			continue
+		}
 		switch {
 		case lower == "var/lib/dpkg/status":
 			for _, p := range sbomParagraphs(f.Data) {
@@ -505,6 +774,22 @@ func catalogSBOMPackages(files []sbomFile) ([]sbomPackage, string, string) {
 					}
 				}
 			}
+		case path.Base(lower) == "package.json" && strings.Contains(lower, "node_modules/"):
+			var manifest struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+				License any    `json:"license"`
+			}
+			if json.Unmarshal(f.Data, &manifest) == nil {
+				license := ""
+				switch value := manifest.License.(type) {
+				case string:
+					license = value
+				case map[string]any:
+					license, _ = value["type"].(string)
+				}
+				add(sbomPackage{Name: manifest.Name, Version: manifest.Version, License: license, Type: "npm", Source: f.Path})
+			}
 		case path.Base(lower) == "go.mod":
 			scanSBOMGoMod(string(f.Data), f.Path, add)
 		case path.Base(lower) == "requirements.txt":
@@ -512,6 +797,16 @@ func catalogSBOMPackages(files []sbomFile) ([]sbomPackage, string, string) {
 		case strings.HasSuffix(lower, ".dist-info/metadata"):
 			if p := sbomParagraphs(f.Data); len(p) > 0 {
 				add(sbomPackage{Name: p[0]["Name"], Version: p[0]["Version"], License: p[0]["License"], Type: "pypi", Source: f.Path})
+			}
+		case path.Base(lower) == "pyvenv.cfg":
+			v := sbomKeyValues(f.Data, "=")
+			pythonVersion := strings.TrimSpace(v["version"])
+			if pythonVersion != "" {
+				add(sbomPackage{Name: "python", Version: pythonVersion, Type: "generic", PURL: "pkg:generic/python@" + url.PathEscape(pythonVersion), Source: f.Path})
+			}
+		case path.Base(lower) == "node_version.h":
+			if nodeVersion := sbomNodeHeaderVersion(string(f.Data)); nodeVersion != "" {
+				add(sbomPackage{Name: "node", Version: nodeVersion, Type: "generic", PURL: "pkg:generic/node@" + url.PathEscape(nodeVersion), Source: f.Path})
 			}
 		case path.Base(lower) == "cargo.lock":
 			for _, p := range sbomTOMLPackages(string(f.Data)) {
@@ -536,7 +831,38 @@ func catalogSBOMPackages(files []sbomFile) ([]sbomPackage, string, string) {
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out, osName, osVersion
+	return out, osName, osVersion, warnings
+}
+
+func sbomPyenvRuntime(filePath string) (string, bool) {
+	parts := strings.Split(strings.Trim(filePath, "/"), "/")
+	for i := 0; i+4 < len(parts); i++ {
+		root := strings.ToLower(parts[i])
+		if (root == ".pyenv" || root == "pyenv") && parts[i+1] == "versions" && parts[i+2] != "" && parts[i+3] == "bin" {
+			binary := strings.ToLower(parts[i+4])
+			if binary == "python" || binary == "python3" || strings.HasPrefix(binary, "python3.") || strings.HasPrefix(binary, "pypy") {
+				return parts[i+2], true
+			}
+		}
+	}
+	return "", false
+}
+
+func sbomNodeHeaderVersion(contents string) string {
+	values := map[string]string{}
+	for _, line := range strings.Split(contents, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "#define" {
+			switch fields[1] {
+			case "NODE_MAJOR_VERSION", "NODE_MINOR_VERSION", "NODE_PATCH_VERSION":
+				values[fields[1]] = strings.Trim(fields[2], `"`)
+			}
+		}
+	}
+	if values["NODE_MAJOR_VERSION"] == "" || values["NODE_MINOR_VERSION"] == "" || values["NODE_PATCH_VERSION"] == "" {
+		return ""
+	}
+	return values["NODE_MAJOR_VERSION"] + "." + values["NODE_MINOR_VERSION"] + "." + values["NODE_PATCH_VERSION"]
 }
 
 func sbomParagraphs(b []byte) []map[string]string {
@@ -718,10 +1044,18 @@ func marshalSPDX(r sbomScanResult) ([]byte, error) {
 		DocumentNamespace: "https://github.com/ziozzang/sugyeol/spdx/" + hex.EncodeToString(namespaceHash[:]),
 		CreationInfo:      map[string]any{"created": r.ScannedAt.Format(time.RFC3339), "creators": []string{"Tool: sugyeol-" + version}},
 		Relationships:     []spdxRelationship{{SPDXElementID: "SPDXRef-DOCUMENT", RelationshipType: "DESCRIBES", RelatedSPDXElement: "SPDXRef-Image"}}}
+	comment := fmt.Sprintf("Sugyeol scanned %s image; platform: %s; operating system: %s %s", r.SourceType, formatOCIPlatform(r.Platform), r.OSName, r.OSVersion)
+	if r.ManifestDigest != "" {
+		comment += "; OCI manifest digest: " + r.ManifestDigest
+	}
+	comment += "; catalog coverage: deb, apk, rpm, npm/yarn/pnpm, Python/pyenv/venv/conda, Go, Cargo, Maven, Ruby, Composer, .NET, Swift, Dart"
+	if len(r.Warnings) > 0 {
+		comment += "; scan warnings: " + strings.Join(r.Warnings, " | ")
+	}
 	root := spdxPackage{SPDXID: "SPDXRef-Image", Name: r.Name, DownloadLocation: "NOASSERTION", FilesAnalyzed: false,
 		LicenseConcluded: "NOASSERTION", LicenseDeclared: "NOASSERTION", CopyrightText: "NOASSERTION",
 		Checksums:      []spdxChecksum{{Algorithm: "SHA256", Value: r.SourceHash}},
-		PackageComment: fmt.Sprintf("Sugyeol scanned %s image; operating system: %s %s", r.SourceType, r.OSName, r.OSVersion)}
+		PackageComment: comment}
 	doc.Packages = append(doc.Packages, root)
 	for i, p := range r.Packages {
 		id := fmt.Sprintf("SPDXRef-Package-%d-%s", i, safeSBOMID(p.Name))
