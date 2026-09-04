@@ -24,7 +24,7 @@ registry image ─────── native pull ──> OCI tar/tgz ──> run
 
 The embedded or sidecar metadata records SHA-256, Ed25519 signatures, the public key, signer identity, signing time, and cumulative signature links. Private signing keys remain under `~/.sugyeol`.
 
-Current release: **v1.6.0**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
+Current release: **v1.6.1**. Source: <https://github.com/ziozzang/sugyeol>. Releases: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## Build and install
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.6.0` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
+`make release VERSION=1.6.1` builds static Linux, macOS, and Windows binaries for x86-64 and ARM64 into `dist/`, plus `SHA256SUMS`.
 
 ## Progress, verbose output, debug output, and cancellation
 
@@ -219,8 +219,18 @@ sugyeol verify -s ./source -n 2 \
 # Pull directly from the registry without Docker/Podman and create an OCI tar.
 sugyeol image pull -o app.oci.tar -p linux/amd64 registry.example.com/team/app:1.2.3
 
-# Download alpine:latest but make runtimes import it as alpine:260904.
-sugyeol image pull -t alpine:260904 -o alpine.oci.tar alpine:latest
+# Without -o, the final image name and tag become the archive filename.
+sugyeol image pull alpine:latest              # alpine-latest.oci.tar
+sugyeol image pull -z alpine:latest           # alpine-latest.oci.tgz
+
+# Retag on import; without -o this creates alpine-260904.oci.tar.
+sugyeol image pull -t alpine:260904 alpine:latest
+
+# Sidecars follow the resolved archive basename when their paths are omitted.
+sugyeol image pull -S -g -t alpine:260904 alpine:latest
+# alpine-260904.oci.tar, alpine-260904.image.meta, alpine-260904.spdx.json
+sugyeol image pull -B -t alpine:260904 alpine:latest
+# also signs alpine-260904.spdx.json into alpine-260904.spdx.json.meta
 
 # A .tgz/.tar.gz output implies gzip; -z is also available.
 sugyeol image pull -o app.oci.tgz -z -p linux/arm64 registry.example.com/team/app:1.2.3
@@ -267,7 +277,7 @@ sugyeol image countersign -k release.pem -l security-review app.oci.tgz app.imag
 sugyeol image verify -n 2 -k release.pem -k reviewer.pem app.oci.tgz app.image.meta
 ```
 
-`image pull` is a native Distribution API client; Docker, containerd, Podman, and nerdctl are neither invoked nor required. It downloads the selected manifest/index, config, and layer blobs, verifies every descriptor size and SHA-256, and writes a standard OCI Image Layout containing `oci-layout`, `index.json`, and content-addressed `blobs/sha256/...`. For interoperable import it writes all of the following metadata:
+`image pull` is a native Distribution API client; Docker, containerd, Podman, and nerdctl are neither invoked nor required. Output naming precedence is explicit `-o/--out`, then a name derived from `-t/--tag`, then a name derived from the source image reference. The automatic form is `<name>-<tag>.oci.tar` (or `.oci.tgz` with `-z`). It downloads the selected manifest/index, config, and layer blobs, verifies every descriptor size and SHA-256, and writes a standard OCI Image Layout containing `oci-layout`, `index.json`, and content-addressed `blobs/sha256/...`. For interoperable import it writes all of the following metadata:
 
 - OCI `org.opencontainers.image.ref.name` with the original tag;
 - containerd/nerdctl `io.containerd.image.name` with the normalized fully qualified image name;
@@ -279,7 +289,7 @@ Local signing accepts both OCI Image Layout archives and Docker `docker save` ar
 
 `image sbom` is an embedded scanner adapted from the MIT-licensed [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner); it does not invoke Syft, Trivy, Docker, or another SBOM executable. It merges image layers with OCI whiteout semantics, supports uncompressed, gzip, and zstd layers, and hashes every resulting regular file. Native catalogers cover Debian dpkg, Alpine apk, RPM Berkeley DB/NDB/SQLite, installed npm packages and npm/yarn/pnpm locks, Python requirements/dist-info/egg-info/Pipenv/Poetry/uv/pyenv/venv/Conda, Go modules, Cargo, Maven metadata, Ruby Bundler/gemspec, PHP Composer, .NET assets/deps/lock files, Swift Package Manager, and Dart Pub. A database that is recognized but cannot be decoded produces a visible warning and is recorded in the SPDX package comment rather than disappearing silently. The SPDX root package binds the exact archive SHA-256, selected platform, OCI manifest digest when available, OS, and catalog coverage. `image sbom verify` recalculates the archive hash and can additionally validate a detached SBOM signature against pinned Ed25519 public keys. Use `-p/--platform` for one image or `-a/--all-platforms` to write one SPDX document (and optional `.meta` signature) per platform into an output directory.
 
-Pull short options are `-o` (out), `-p` (platform), `-a` (all platforms), `-t` (import name/tag override), `-z` (gzip), `-S` (sign archive), `-m` (archive metadata), `-l` (label), `-b` (SBOM output), and `-B` (sign SBOM). `-t/--tag` accepts a complete `repository:tag` or a bare replacement tag for the source repository; it changes archive reference metadata, not verified image content. SBOM uses `-o`, `-p`, `-a`, `-S`, `-l`; SBOM verification uses `-k`, `-n`. Sign/countersign use `-o`, `-l`, `-k`, and `-n` as applicable. Direct signing of a mutable repository/tag is intentionally not a primary operation; the downloaded immutable archive is the signed artifact.
+Pull short options are `-o` (out), `-p` (platform), `-a` (all platforms), `-t` (import name/tag override), `-z` (gzip), `-S` (sign archive), `-m` (archive metadata), `-g` (generate default-named SBOM), `-b` (explicit SBOM output), and `-B` (generate and sign SBOM). `-t/--tag` accepts a complete `repository:tag` or a bare replacement tag for the source repository; it changes archive reference metadata, not verified image content. With no explicit `-m`/`-b`, `-S` creates `<base>.image.meta`, `-g` creates `<base>.spdx.json`, and `-B` also creates `<base>.spdx.json.meta`; `-a` uses `<base>-sboms/`. SBOM uses `-o`, `-p`, `-a`, `-S`, `-l`; SBOM verification uses `-k`, `-n`. Sign/countersign use `-o`, `-l`, `-k`, and `-n` as applicable. Direct signing of a mutable repository/tag is intentionally not a primary operation; the downloaded immutable archive is the signed artifact.
 
 ## Internationalization
 
@@ -295,7 +305,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check       # short: -c
 sugyeol update --force       # short: -f
-sugyeol update --version v1.6.0  # short: -v v1.6.0
+sugyeol update --version v1.6.1  # short: -v v1.6.1
 ```
 
 The updater chooses the current platform asset from GitHub Releases, verifies it against `SHA256SUMS`, and atomically replaces the running executable. Interactive execution performs a soft-failing release check at most once per 24 hours and prints only a notice; actual replacement always requires `sugyeol update`. Set `SUGYEOL_NO_UPDATE_CHECK=1` to disable notices.
@@ -307,12 +317,12 @@ GitHub Actions are intentionally disabled. Build, test, inspect checksums, and p
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.6.0
+make release VERSION=1.6.1
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.6.0 \
-  dist/sugyeol_1.6.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.0"
+gh release create v1.6.1 \
+  dist/sugyeol_1.6.1_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.1"
 ```
 
 ## Security boundaries

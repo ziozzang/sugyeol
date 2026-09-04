@@ -44,7 +44,8 @@ func imagePullCommand(args []string) error {
 	metaOut := fs.String("meta", "", "signature metadata output path (requires sign)")
 	label := fs.String("label", "", "optional signed role/purpose label")
 	sbomOut := fs.String("sbom", "", "generate an SPDX 2.3 SBOM at this path")
-	signSBOM := fs.Bool("sign-sbom", false, "sign the generated SBOM (requires sbom)")
+	generateSBOM := fs.Bool("generate-sbom", false, "generate an SPDX 2.3 SBOM at the default path")
+	signSBOM := fs.Bool("sign-sbom", false, "generate and sign the SBOM")
 	archiveTag := fs.String("tag", "", "override the imported image name/tag (for example alpine:260904)")
 	fs.StringVar(out, "o", "", "output OCI image-layout .tar or .tgz")
 	fs.StringVar(platform, "p", runtime.GOOS+"/"+runtime.GOARCH, "platform os/arch[/variant]")
@@ -54,7 +55,8 @@ func imagePullCommand(args []string) error {
 	fs.StringVar(metaOut, "m", "", "signature metadata output path (requires sign)")
 	fs.StringVar(label, "l", "", "optional signed role/purpose label")
 	fs.StringVar(sbomOut, "b", "", "generate an SPDX 2.3 SBOM at this path")
-	fs.BoolVar(signSBOM, "B", false, "sign the generated SBOM (requires sbom)")
+	fs.BoolVar(generateSBOM, "g", false, "generate an SPDX 2.3 SBOM at the default path")
+	fs.BoolVar(signSBOM, "B", false, "generate and sign the SBOM")
 	fs.StringVar(archiveTag, "t", "", "override the imported image name/tag (for example alpine:260904)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -65,8 +67,8 @@ func imagePullCommand(args []string) error {
 	if *metaOut != "" && !*signAfterPull {
 		return fmt.Errorf("--meta requires --sign")
 	}
-	if *signSBOM && *sbomOut == "" {
-		return fmt.Errorf("--sign-sbom requires --sbom")
+	if *signSBOM {
+		*generateSBOM = true
 	}
 	wanted, err := parseOCIPlatform(*platform)
 	if err != nil {
@@ -80,13 +82,9 @@ func imagePullCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *out == "" {
-		base := filepath.Base(ref.Repository) + "-" + strings.NewReplacer(":", "-", "@", "-").Replace(ref.Identifier)
-		if *gzipOutput {
-			*out = base + ".oci.tgz"
-		} else {
-			*out = base + ".oci.tar"
-		}
+	*out = resolveImageArchiveOutput(*out, archiveRef, *gzipOutput)
+	if *generateSBOM && *sbomOut == "" {
+		*sbomOut = defaultImageSBOMOutput(*out, *allPlatforms)
 	}
 	if strings.HasSuffix(strings.ToLower(*out), ".tgz") || strings.HasSuffix(strings.ToLower(*out), ".tar.gz") {
 		*gzipOutput = true
@@ -127,6 +125,33 @@ func imagePullCommand(args []string) error {
 		return generateImageSBOMs(*out, *sbomOut, *signSBOM, "sbom", *platform, *allPlatforms)
 	}
 	return nil
+}
+
+func defaultImageArchiveName(ref parsedImageReference, gzipOutput bool) string {
+	name := filepath.Base(ref.Repository)
+	identifier := strings.NewReplacer(":", "-", "@", "-", "/", "-").Replace(ref.Identifier)
+	if identifier != "" {
+		name += "-" + identifier
+	}
+	if gzipOutput {
+		return name + ".oci.tgz"
+	}
+	return name + ".oci.tar"
+}
+
+func resolveImageArchiveOutput(explicit string, archiveRef parsedImageReference, gzipOutput bool) string {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit
+	}
+	return defaultImageArchiveName(archiveRef, gzipOutput)
+}
+
+func defaultImageSBOMOutput(archive string, allPlatforms bool) string {
+	output := defaultSBOMName(archive)
+	if allPlatforms {
+		return strings.TrimSuffix(output, ".spdx.json") + "-sboms"
+	}
+	return output
 }
 
 func parseOCIPlatform(value string) (ociPlatform, error) {

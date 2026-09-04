@@ -1,6 +1,6 @@
 .PHONY: all build test release clean
 
-VERSION ?= 1.6.0
+VERSION ?= 1.6.1
 
 all: build
 

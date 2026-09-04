@@ -24,7 +24,7 @@
 
 ZIP 내부 또는 sidecar 메타데이터에는 SHA-256, Ed25519 서명, 공개키, 서명자 신원, 서명 시각과 누적 서명 연결 정보가 기록됩니다. 개인 서명키는 `~/.sugyeol` 아래에만 유지됩니다.
 
-현재 릴리스는 **v1.6.0**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
+현재 릴리스는 **v1.6.1**입니다. 소스: <https://github.com/ziozzang/sugyeol>, 릴리스: <https://github.com/ziozzang/sugyeol/releases>.
 
 ## 빌드와 설치
 
@@ -36,7 +36,7 @@ make build
 file ./sugyeol
 ```
 
-`make release VERSION=1.6.0`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
+`make release VERSION=1.6.1`은 Linux/macOS/Windows의 x86-64·ARM64 정적 바이너리와 `SHA256SUMS`를 `dist/`에 만듭니다.
 
 ## 진행률·상세 출력·디버그·취소
 
@@ -218,8 +218,18 @@ sugyeol verify -s ./source -n 2 \
 # Docker/Podman 없이 레지스트리에서 직접 받아 OCI tar를 만듭니다.
 sugyeol image pull -o app.oci.tar -p linux/amd64 registry.example.com/team/app:1.2.3
 
-# alpine:latest를 받되 runtime에는 alpine:260904로 import되게 합니다.
-sugyeol image pull -t alpine:260904 -o alpine.oci.tar alpine:latest
+# -o를 생략하면 최종 이미지 이름과 태그로 파일명을 만듭니다.
+sugyeol image pull alpine:latest              # alpine-latest.oci.tar
+sugyeol image pull -z alpine:latest           # alpine-latest.oci.tgz
+
+# import 태그를 바꿉니다. -o 생략 시 alpine-260904.oci.tar가 됩니다.
+sugyeol image pull -t alpine:260904 alpine:latest
+
+# 경로를 생략한 sidecar는 결정된 archive basename을 따릅니다.
+sugyeol image pull -S -g -t alpine:260904 alpine:latest
+# alpine-260904.oci.tar, alpine-260904.image.meta, alpine-260904.spdx.json
+sugyeol image pull -B -t alpine:260904 alpine:latest
+# alpine-260904.spdx.json을 서명한 alpine-260904.spdx.json.meta도 생성
 
 # .tgz/.tar.gz 출력은 gzip을 자동 선택하며 -z도 쓸 수 있습니다.
 sugyeol image pull -o app.oci.tgz -z -p linux/arm64 registry.example.com/team/app:1.2.3
@@ -266,7 +276,7 @@ sugyeol image countersign -k release.pem -l security-review app.oci.tgz app.imag
 sugyeol image verify -n 2 -k release.pem -k reviewer.pem app.oci.tgz app.image.meta
 ```
 
-`image pull`은 Distribution API를 직접 사용하는 네이티브 클라이언트이며 Docker, containerd, Podman, nerdctl을 호출하지도 필요로 하지도 않습니다. 선택한 manifest/index, config, layer blob을 받고 모든 descriptor 크기와 SHA-256을 검사한 뒤 `oci-layout`, `index.json`, content-addressed `blobs/sha256/...`를 담은 표준 OCI Image Layout을 만듭니다. 상호운용 가능한 import를 위해 다음 메타데이터를 모두 기록합니다.
+`image pull`은 Distribution API를 직접 사용하는 네이티브 클라이언트이며 Docker, containerd, Podman, nerdctl을 호출하지도 필요로 하지도 않습니다. 출력 파일명 우선순위는 명시적 `-o/--out`, `-t/--tag`에서 파생한 이름, 원본 이미지 참조에서 파생한 이름 순서입니다. 자동 형식은 `<이름>-<태그>.oci.tar`이고 `-z`에서는 `.oci.tgz`를 사용합니다. 선택한 manifest/index, config, layer blob을 받고 모든 descriptor 크기와 SHA-256을 검사한 뒤 `oci-layout`, `index.json`, content-addressed `blobs/sha256/...`를 담은 표준 OCI Image Layout을 만듭니다. 상호운용 가능한 import를 위해 다음 메타데이터를 모두 기록합니다.
 
 - 원래 태그를 담은 OCI `org.opencontainers.image.ref.name`
 - 정규화한 전체 이미지명을 담은 containerd/nerdctl `io.containerd.image.name`
@@ -278,7 +288,7 @@ sugyeol image verify -n 2 -k release.pem -k reviewer.pem app.oci.tgz app.image.m
 
 `image sbom`은 MIT 라이선스 [bongsu-scanner](https://github.com/ziozzang/bongsu-scanner)의 스캐너를 수결에 맞게 가져온 내장 기능이며 Syft, Trivy, Docker 또는 별도 SBOM 실행 파일을 호출하지 않습니다. OCI whiteout 규칙에 따라 image layer를 합치고 무압축/gzip/zstd layer를 처리하며 최종 regular file을 모두 해시합니다. 네이티브 cataloger는 Debian dpkg, Alpine apk, RPM Berkeley DB/NDB/SQLite, 설치된 npm package와 npm/yarn/pnpm lock, Python requirements/dist-info/egg-info/Pipenv/Poetry/uv/pyenv/venv/Conda, Go module, Cargo, Maven metadata, Ruby Bundler/gemspec, PHP Composer, .NET assets/deps/lock, Swift Package Manager, Dart Pub을 지원합니다. 인식한 database를 해석하지 못하면 조용히 누락하지 않고 화면 경고와 SPDX package comment에 남깁니다. SPDX root package는 원본 archive SHA-256, 선택한 플랫폼, 가능한 경우 OCI manifest digest, OS와 catalog 범위를 묶습니다. `image sbom verify`는 archive hash를 다시 계산하며 고정한 Ed25519 공개키로 detached SBOM 서명도 검증할 수 있습니다. `-p/--platform`은 한 플랫폼, `-a/--all-platforms`는 출력 디렉터리에 플랫폼별 SPDX와 선택적 `.meta` 서명을 만듭니다.
 
-Pull 단축 옵션은 `-o`(out), `-p`(platform), `-a`(전체 플랫폼), `-t`(import 이름/tag 강제), `-z`(gzip), `-S`(archive 서명), `-m`(archive metadata), `-l`(label), `-b`(SBOM 출력), `-B`(SBOM 서명)입니다. `-t/--tag`는 완전한 `repository:tag` 또는 원본 repository에 적용할 tag 하나만 받을 수 있으며, 검증된 image content가 아니라 archive 참조 metadata만 변경합니다. SBOM은 `-o`, `-p`, `-a`, `-S`, `-l`, SBOM 검증은 `-k`, `-n`을 씁니다. Sign/countersign에는 상황에 따라 `-o`, `-l`, `-k`, `-n`을 씁니다. 변경 가능한 리포지터리/태그 자체를 직접 서명하는 것은 기본 기능으로 두지 않고, 다운로드한 불변 아카이브를 서명 대상으로 삼습니다.
+Pull 단축 옵션은 `-o`(out), `-p`(platform), `-a`(전체 플랫폼), `-t`(import 이름/tag 강제), `-z`(gzip), `-S`(archive 서명), `-m`(archive metadata), `-g`(기본 이름 SBOM 생성), `-b`(명시적 SBOM 출력), `-B`(SBOM 생성·서명)입니다. `-t/--tag`는 완전한 `repository:tag` 또는 원본 repository에 적용할 tag 하나만 받을 수 있으며, 검증된 image content가 아니라 archive 참조 metadata만 변경합니다. `-m`/`-b`를 명시하지 않으면 `-S`는 `<base>.image.meta`, `-g`는 `<base>.spdx.json`, `-B`는 추가로 `<base>.spdx.json.meta`를 만들고 `-a`에서는 `<base>-sboms/`를 씁니다. SBOM은 `-o`, `-p`, `-a`, `-S`, `-l`, SBOM 검증은 `-k`, `-n`을 씁니다. Sign/countersign에는 상황에 따라 `-o`, `-l`, `-k`, `-n`을 씁니다. 변경 가능한 리포지터리/태그 자체를 직접 서명하는 것은 기본 기능으로 두지 않고, 다운로드한 불변 아카이브를 서명 대상으로 삼습니다.
 
 ## 다국어
 
@@ -294,7 +304,7 @@ sugyeol --lang ko help
 ```sh
 sugyeol update --check          # 단축: -c
 sugyeol update --force          # 단축: -f
-sugyeol update --version v1.6.0 # 단축: -v v1.6.0
+sugyeol update --version v1.6.1 # 단축: -v v1.6.1
 ```
 
 현재 플랫폼용 GitHub Release 자산을 받고 `SHA256SUMS`를 확인한 뒤 실행 파일을 원자 교체합니다. 대화형 실행은 최대 24시간에 한 번 실패 허용 방식으로 새 버전 알림만 확인하며 실제 교체에는 항상 `sugyeol update`가 필요합니다. `SUGYEOL_NO_UPDATE_CHECK=1`로 알림 확인을 끌 수 있습니다.
@@ -306,12 +316,12 @@ GitHub Actions는 의도적으로 비활성화했습니다. 직접 빌드·테�
 ```sh
 go test -race ./...
 go vet ./...
-make release VERSION=1.6.0
+make release VERSION=1.6.1
 (cd dist && sha256sum -c SHA256SUMS)
 
-gh release create v1.6.0 \
-  dist/sugyeol_1.6.0_* dist/SHA256SUMS \
-  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.0"
+gh release create v1.6.1 \
+  dist/sugyeol_1.6.1_* dist/SHA256SUMS \
+  --repo ziozzang/sugyeol --target main --title "Sugyeol v1.6.1"
 ```
 
 ## 보안 경계

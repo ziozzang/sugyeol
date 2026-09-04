@@ -934,9 +934,10 @@ func TestContainerImageSignAndVerify(t *testing.T) {
 	}))
 	defer server.Close()
 	imageRef := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
-	archive := filepath.Join(t.TempDir(), "image.oci.tgz")
-	meta := filepath.Join(t.TempDir(), "image.meta")
-	if err := imagePullCommand([]string{"-o", archive, "-z", "-S", "-m", meta, "-l", "release", "-t", "alpine:260904", imageRef}); err != nil {
+	outputDir := t.TempDir()
+	archive := filepath.Join(outputDir, "image.oci.tgz")
+	meta := filepath.Join(outputDir, "image.image.meta")
+	if err := imagePullCommand([]string{"-o", archive, "-z", "-S", "-l", "release", "-t", "alpine:260904", imageRef}); err != nil {
 		t.Fatal(err)
 	}
 	subject, err := inspectContainerArchive(archive)
@@ -1280,6 +1281,28 @@ func TestParseImageReference(t *testing.T) {
 	rewritten, err = parseArchiveImageReference("alpine:260904", source)
 	if err != nil || rewritten.Repository != "library/alpine" || rewritten.Identifier != "260904" {
 		t.Fatalf("named archive tag rewrite = %+v, %v", rewritten, err)
+	}
+	if got := defaultImageArchiveName(rewritten, false); got != "alpine-260904.oci.tar" {
+		t.Fatalf("default archive name = %q", got)
+	}
+	if got := defaultImageArchiveName(rewritten, true); got != "alpine-260904.oci.tgz" {
+		t.Fatalf("default compressed archive name = %q", got)
+	}
+	if got := resolveImageArchiveOutput("forced-output.tar", rewritten, true); got != "forced-output.tar" {
+		t.Fatalf("explicit output did not win over tag-derived name: %q", got)
+	}
+	if got := defaultLocalImageMetaName("alpine-260904.oci.tar"); got != "alpine-260904.image.meta" {
+		t.Fatalf("default image metadata name = %q", got)
+	}
+	if got := defaultImageSBOMOutput("alpine-260904.oci.tar", false); got != "alpine-260904.spdx.json" {
+		t.Fatalf("default SBOM name = %q", got)
+	}
+	if got := defaultImageSBOMOutput("alpine-260904.oci.tar", true); got != "alpine-260904-sboms" {
+		t.Fatalf("default multi-platform SBOM directory = %q", got)
+	}
+	digestRef, _ := parseImageReference("example.com/team/app@sha256:" + strings.Repeat("a", 64))
+	if got := defaultImageArchiveName(digestRef, false); got != "app-sha256-"+strings.Repeat("a", 64)+".oci.tar" {
+		t.Fatalf("default digest archive name = %q", got)
 	}
 }
 
